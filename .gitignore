@@ -1,0 +1,32 @@
+# Keil uVision build outputs
+*.axf
+*.hex
+*.bin
+*.crf
+*.d
+*.dep
+*.htm
+*.lst
+*.map
+*.o
+*.iex
+*.orig
+*.lnp
+
+# Keil uVision project user settings
+*.uvguix.*
+*.uvoptx
+
+# RTOS and scatter file backups
+*.Bak
+
+# JLink/STLink logs
+JLinkLog.txt
+*.dbgconf
+
+# IDE
+.vscode/
+
+# OS junk
+Thumbs.db
+Desktop.ini
