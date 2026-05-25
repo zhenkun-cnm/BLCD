@@ -24,8 +24,9 @@
 JLinkLog.txt
 *.dbgconf
 
-# IDE
+# IDE / Claude Code
 .vscode/
+.claude/
 
 # OS junk
 Thumbs.db
