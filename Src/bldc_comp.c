@@ -1,5 +1,6 @@
 #include "stm32f0xx.h"
 #include "bldc_comp.h"
+#include "bldc_debug.h"
 
 void BSP_COMP2_Init(void)
 {
@@ -34,7 +35,14 @@ void BSP_COMP2_Init(void)
 
     // 【修正处】选择反相输入端 (Vin-) 为 PA2
     // 在F051中，110 = COMP2_INM6 = PA2
-    COMP->CSR |= (COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_1); 
+    //COMP->CSR |= (COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_1); 
+    COMP->CSR &= ~COMP_CSR_COMP2INSEL; 
+
+	// 2. 仅置位第 2 位 (二进制 100)
+	COMP->CSR |= COMP_CSR_COMP2INSEL_2; //PA4
+	//COMP->CSR |= (COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_0);
+	
+	
     //COMP->CSR |= COMP_CSR_COMP2HYST_0;  // 写入 01，配置为低迟滞 (Low Hysteresis)
     
 // ---------------------------------------------------------
@@ -166,10 +174,73 @@ void BSP_COMP2_Stop(void)
     /* =================================================================================
      * 关闭比较器电源
      * ================================================================================= */
-    
+
     // 将 COMP_CSR 寄存器中的 COMP2EN (使能位) 清零 (写 0)
     // 这会直接切断比较器的内部电源，比较器停止工作，输出端会被强制拉低或保持无效状态。
     COMP->CSR &= ~COMP_CSR_COMP2EN;
+}
+
+/**
+  * @brief  COMP2 通道独立诊断 —— 轮流切换 PA2/PA4/PA5，跨时间窗口统计翻转次数
+  * @note   【重要】本函数为阻塞式独立诊断，会暂停调用者的执行流约 500ms。
+  *         调用前确保电机正在转动（开环换相或外力拖动），且 COMP2 已使能。
+  *         每个通道采样约 165ms (300 点 × 550us)，统计 COMP2OUT 的电平翻转次数。
+  *         正常工作的通道应能看到多次翻转（BEMF 穿越中性点）；
+  *         异常通道翻转次数为 0（引脚始终高于或始终低于中性点电压）。
+  */
+void BSP_COMP2_Channel_Diagnostic(void)
+{
+    uint32_t saved_insel = COMP->CSR & COMP_CSR_COMP2INSEL;
+    uint32_t saved_imr   = EXTI->IMR  & EXTI_IMR_MR22;
+
+    /* 屏蔽中断，纯轮询模式 */
+    EXTI->IMR &= ~EXTI_IMR_MR22;
+    COMP->CSR |= COMP_CSR_COMP2EN;
+
+    typedef struct {
+        const char *name;
+        uint32_t    sel;
+    } ch_t;
+
+    const ch_t channels[] = {
+        {"PA2", COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_1},  /* 110 = PA2 */
+        {"PA4", COMP_CSR_COMP2INSEL_2},                            /* 100 = PA4 */
+        {"PA5", COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_0},   /* 101 = PA5 */
+    };
+
+    LOG_DEBUG("=== COMP2 Channel Edge Diagnostic ===\r\n");
+    LOG_DEBUG("    (300 samples/ch, 550us spacing, ~165ms/ch)\r\n");
+
+    for (uint8_t ci = 0; ci < 3; ci++)
+    {
+        COMP->CSR = (COMP->CSR & ~COMP_CSR_COMP2INSEL) | channels[ci].sel;
+        for (volatile uint16_t d = 0; d < 200; d++) { __NOP(); }
+
+        uint8_t  prev  = (COMP->CSR & COMP_CSR_COMP2OUT) ? 1 : 0;
+        uint8_t  first = prev;
+        uint16_t edges = 0;
+
+        for (uint16_t s = 0; s < 300; s++)
+        {
+            delay_us(550);   /* 300×550us ≈ 165ms，跨越多个换相周期 */
+
+            uint8_t cur = (COMP->CSR & COMP_CSR_COMP2OUT) ? 1 : 0;
+            if (cur != prev) {
+                edges++;
+            }
+            prev = cur;
+        }
+
+        LOG_DEBUG("  %s: edges=%u first=%u last=%u\r\n",
+                  channels[ci].name, edges, first, prev);
+    }
+
+    /* 恢复现场 */
+    COMP->CSR = (COMP->CSR & ~COMP_CSR_COMP2INSEL) | saved_insel;
+    EXTI->PR  = EXTI_PR_PR22;
+    EXTI->IMR |= saved_imr;
+
+    LOG_DEBUG("=== Diagnostic End ===\r\n");
 }
 
 

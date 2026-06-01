@@ -590,22 +590,35 @@ void ESHL_Start(ESHL_DIRECTION_ENUM_T direction)
     	}
     	delay_ms(1);
     }
+
+    /* ==========================================================================
+     * COMP2 三通道轮流诊断：每 8 步换相切换一次比较器输入通道，累计各通道的
+     * 过零事件次数。换相照常进行，电机持续转动，不受诊断影响。
+     * 通道轮转顺序：PA4(初始) → PA2 → PA5 → PA4 → ...
+     * ========================================================================== */
+    uint8_t  bmef_pa2 = 0, bmef_pa4 = 0, bmef_pa5 = 0;
+    uint8_t  diag_chan     = 0;   /* 0=PA4(init), 1=PA2, 2=PA5 */
+    uint8_t  diag_step_cnt = 0;
+
     while (1)
     {
         for (uint16_t i = 0; i < time; ++i) {
             delay_us(55);
         }
+
         if (time < 20)
         {
 			MOS_CloseAll();
             time = 100;
+            /* ---- 打印三通道诊断结果 ---- */
+            LOG_DEBUG("BMEF per channel: PA2=%u PA4=%u PA5=%u (total=%u)\r\n",
+                      bmef_pa2, bmef_pa4, bmef_pa5, BMEF_num);
         	if ((BMEF_num >= 18) && (BMEF_num <= 35))//开环启动成功
         	{
 				LOG_INFO("BLDC_CLOSE_LOOP_START_SUCCESS\r\n");
 				LOG_INFO("ESHL_step = %d\r\n", ESHL_step);
 				LOG_INFO("BMEF_num = %d\r\n", BMEF_num);
                 BSP_COMP2_Stop();
-				
                 BSP_COMP2_Start_IT();
         		ESHL_state = (ESHL_direction == ESHL_CLOCKWISE) ? ESHL_STATE_RUN_CLOCKWISE : ESHL_STATE_RUN_COUNTER_CLOCKWISE;//电调状态更新为对应方向运动状态
 			}
@@ -642,8 +655,27 @@ void ESHL_Start(ESHL_DIRECTION_ENUM_T direction)
 		  }
 		  ESHL_U_D_Ctrl(ESHL_run_pwm);
 
+        /* ---- 通道轮转：每 8 步换相切换到下一个比较器输入通道 ---- */
+        diag_step_cnt++;
+        if (diag_step_cnt >= 8) {
+            diag_step_cnt = 0;
+            diag_chan = (diag_chan + 1) % 3;
+            switch (diag_chan) {
+                case 0: COMP2_SEL_PA4(); break;
+                case 1: COMP2_SEL_PA2(); break;
+                case 2: COMP2_SEL_PA5(); break;
+            }
+            EXTI->PR = EXTI_PR_PR22; /* 清除通道切换产生的虚假挂起标志 */
+        }
+
+        /* ---- 分通道累计过零事件 ---- */
     	if (SENSE_H) {
     		BMEF_num ++;
+            switch (diag_chan) {
+                case 0: bmef_pa4++; break;
+                case 1: bmef_pa2++; break;
+                case 2: bmef_pa5++; break;
+            }
     	}
 
     }
