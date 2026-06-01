@@ -460,103 +460,220 @@ ESHL_DIRECTION_ENUM_T ESHL_GetDirection() {
 void ESHL_SetDirection(ESHL_DIRECTION_ENUM_T direction) {
     ESHL_direction = (uint8_t)direction;
 }
-
 void BLDC_COMP2_TriggerCallback(void)
 {
     uint8_t sense = 0;
-
+    
     // 关闭全局中断
     __disable_irq();
-
-    // 【新增】：硬件消隐防抖
-    // 换相瞬间MOS管开关会产生巨大的电压毛刺，等几微秒再读比较器，避开尖峰
-    delay_us(3); 
-
-    // 采集当前比较器状态 (仅读一次！)
-    if(SENSE_H) sense = 1; else sense = 0;
-
-    switch(ESHL_step)
+    do
     {
-    //=================================================================
-    // 顺时针方向 (正转)
-    //=================================================================
-        case 0:
-            if(sense) {
-                ESHL_step++; ESHL_step %= 6;
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-                COMP2_SEL_PA5();       // 下一步检测C相 (PA5)
-                COMP2_EXTI_FALLING();  // 配置为下降沿触发
-            } else {
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-            }
-            break;
+        // 采集当前比较器状态
+        if(SENSE_H) sense = 1; else sense = 0;
+        switch(ESHL_step)
+        {
+        //--------------正转-------------
+            case 0:
+                if(sense)
+                {
+                    ESHL_step++;
+                    ESHL_step %= 6;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
 
-        case 1:
-            if(!sense) { // 期待过零点下降沿
-                ESHL_step++; ESHL_step %= 6;
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-                COMP2_SEL_PA4();       // 下一步检测B相 (PA4)
-                COMP2_EXTI_RISING();   // 配置为上升沿触发
-            } else {
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-            }
-            break;
+                    COMP2_SEL_PA5();       // 下一步检测C相电动势,切换比较器输入端为PA5
+                    COMP2_EXTI_FALLING();  // 下降沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
 
-        case 2:
-            if(sense) {
-                ESHL_step++; ESHL_step %= 6;
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-                COMP2_SEL_PA2();       // 下一步检测A相 (PA2)
-                COMP2_EXTI_FALLING();
-            } else {
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-            }
-            break;
+            case 1:
+                if(!sense)
+                {
+                    ESHL_step++;
+                    ESHL_step %= 6;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
 
-        case 3:
-            if(!sense) {
-                ESHL_step++; ESHL_step %= 6;
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-                COMP2_SEL_PA5();       
-                COMP2_EXTI_RISING();
-            } else {
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-            }
-            break;
+                    COMP2_SEL_PA4();       // 下一步检测B相电动势,切换比较器输入端为PA4
+                    COMP2_EXTI_RISING();   // 上升沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
 
-        case 4:
-            if(sense) {
-                ESHL_step++; ESHL_step %= 6;
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-                COMP2_SEL_PA4();       
-                COMP2_EXTI_FALLING();
-            } else {
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-            }
-            break;
+            case 2:
+                if(sense)
+                {
+                    ESHL_step++;
+                    ESHL_step %= 6;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
 
-        case 5:
-            if(!sense) {
-                ESHL_step++; ESHL_step %= 6;
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-                COMP2_SEL_PA2();       
-                COMP2_EXTI_RISING();
-            } else {
-                ESHL_U_D_Ctrl(ESHL_run_pwm);
-            }
-            break;
+                    COMP2_SEL_PA2();       // 下一步检测A相电动势,切换比较器输入端为PA2
+                    COMP2_EXTI_FALLING();  // 下降沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
 
-    //=================================================================
-    // 逆时针方向 (反转) - 请参照上面的逻辑同步删除 do...while
-    //=================================================================
-        // ... (保留你原来的 case 6 到 11 的逻辑，但不要包在循环里) ...
-        default:
-            MOS_CloseAll();
-            break;
-    }
+            case 3:
+                if(!sense)
+                {
+                    ESHL_step++;
+                    ESHL_step %= 6;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
 
-    // 【极其重要】：因为上面刚刚切换了通道和 EXTI 极性，
-    // 硬件必定会立刻产生一个虚假的 EXTI 中断标志，必须在这里将其抹除！
+                    COMP2_SEL_PA5();       // 下一步检测C相电动势,切换比较器输入端为PA5
+                    COMP2_EXTI_RISING();   // 上升沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            case 4:
+                if(sense)
+                {
+                    ESHL_step++;
+                    ESHL_step %= 6;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA4();       // 下一步检测B相电动势,切换比较器输入端为PA4
+                    COMP2_EXTI_FALLING();  // 下降沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            case 5:
+                if(!sense)
+                {
+                    ESHL_step++;
+                    ESHL_step %= 6;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA2();       // 下一步检测A相电动势,切换比较器输入端为PA2
+                    COMP2_EXTI_RISING();   // 上升沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+        //--------------反转-------------
+            case 6:
+                if(sense)
+                {
+                    ESHL_step++;
+                    ESHL_step = (ESHL_step > 11) ? 6 : ESHL_step;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA5();       // 下一步检测C相电动势,切换比较器输入端为PA5
+                    COMP2_EXTI_FALLING();  // 下降沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            case 7:
+                if(!sense)
+                {
+                    ESHL_step++;
+                    ESHL_step = (ESHL_step > 11) ? 6 : ESHL_step;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA2();       // 下一步检测A相电动势,切换比较器输入端为PA2
+                    COMP2_EXTI_RISING();   // 上升沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            case 8:
+                if(sense)
+                {
+                    ESHL_step++;
+                    ESHL_step = (ESHL_step > 11) ? 6 : ESHL_step;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA4();       // 下一步检测B相电动势,切换比较器输入端为PA4
+                    COMP2_EXTI_FALLING();  // 下降沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            case 9:
+                if(!sense)
+                {
+                    ESHL_step++;
+                    ESHL_step = (ESHL_step > 11) ? 6 : ESHL_step;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA5();       // 下一步检测C相电动势,切换比较器输入端为PA5
+                    COMP2_EXTI_RISING();   // 上升沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            case 10:
+                if(sense)
+                {
+                    ESHL_step++;
+                    ESHL_step = (ESHL_step > 11) ? 6 : ESHL_step;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA2();       // 下一步检测A相电动势,切换比较器输入端为PA2
+                    COMP2_EXTI_FALLING();  // 下降沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            case 11:
+                if(!sense)
+                {
+                    ESHL_step++;
+                    ESHL_step = (ESHL_step > 11) ? 6 : ESHL_step;
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+
+                    COMP2_SEL_PA4();       // 下一步检测B相电动势,切换比较器输入端为PA4
+                    COMP2_EXTI_RISING();   // 上升沿触发
+                }
+                else
+                {
+                    ESHL_U_D_Ctrl(ESHL_run_pwm);
+                }
+                break;
+
+            default:
+                MOS_CloseAll();
+                break;
+        }
+    } while((SENSE_L && sense) || (SENSE_H && !sense));
+
+    // 【极其重要】：因为上面循环里可能切换了通道和极性，硬件必然会产生一个挂起的虚假中断标志
+    // 必须在开启全局中断前将其抹除，否则一出函数就会死循环重进中断！
     EXTI->PR = EXTI_PR_PR22;
 
     // 恢复全局中断
@@ -590,35 +707,47 @@ void ESHL_Start(ESHL_DIRECTION_ENUM_T direction)
     	}
     	delay_ms(1);
     }
-
-    /* ==========================================================================
-     * COMP2 三通道轮流诊断：每 8 步换相切换一次比较器输入通道，累计各通道的
-     * 过零事件次数。换相照常进行，电机持续转动，不受诊断影响。
-     * 通道轮转顺序：PA4(初始) → PA2 → PA5 → PA4 → ...
-     * ========================================================================== */
-    uint8_t  bmef_pa2 = 0, bmef_pa4 = 0, bmef_pa5 = 0;
-    uint8_t  diag_chan     = 0;   /* 0=PA4(init), 1=PA2, 2=PA5 */
-    uint8_t  diag_step_cnt = 0;
-
     while (1)
     {
         for (uint16_t i = 0; i < time; ++i) {
             delay_us(55);
         }
-
         if (time < 20)
         {
 			MOS_CloseAll();
             time = 100;
-            /* ---- 打印三通道诊断结果 ---- */
-            LOG_DEBUG("BMEF per channel: PA2=%u PA4=%u PA5=%u (total=%u)\r\n",
-                      bmef_pa2, bmef_pa4, bmef_pa5, BMEF_num);
         	if ((BMEF_num >= 18) && (BMEF_num <= 35))//开环启动成功
         	{
 				LOG_INFO("BLDC_CLOSE_LOOP_START_SUCCESS\r\n");
 				LOG_INFO("ESHL_step = %d\r\n", ESHL_step);
 				LOG_INFO("BMEF_num = %d\r\n", BMEF_num);
                 BSP_COMP2_Stop();
+				
+                // ==========================================
+                // 【新增代码】：根据当前 step 预先对齐比较器通道和触发边沿
+                // 防止开启中断瞬间被 PWM 斩波误触发
+                // ==========================================
+                if(ESHL_direction == ESHL_CLOCKWISE) {
+                    switch (ESHL_step) {
+                        case 0: COMP2_SEL_PA2(); COMP2_EXTI_FALLING(); break; // 下一步期待A相下降
+                        case 1: COMP2_SEL_PA5(); COMP2_EXTI_RISING(); break;  // 下一步期待C相上升
+                        case 2: COMP2_SEL_PA4(); COMP2_EXTI_FALLING(); break; // 下一步期待B相下降
+                        case 3: COMP2_SEL_PA2(); COMP2_EXTI_RISING(); break;  // 下一步期待A相上升
+                        case 4: COMP2_SEL_PA5(); COMP2_EXTI_FALLING(); break; // 下一步期待C相下降
+                        case 5: COMP2_SEL_PA4(); COMP2_EXTI_RISING(); break;  // 下一步期待B相上升
+                    }
+                } else {
+                    // 请参照 BLDC_COMP2_TriggerCallback 中的反转逻辑补全 6~11 的初始对齐
+                    switch (ESHL_step) {
+                        case 6:  COMP2_SEL_PA5(); COMP2_EXTI_FALLING(); break; 
+                        case 7:  COMP2_SEL_PA2(); COMP2_EXTI_RISING(); break;  
+                        case 8:  COMP2_SEL_PA4(); COMP2_EXTI_FALLING(); break; 
+                        case 9:  COMP2_SEL_PA5(); COMP2_EXTI_RISING(); break;  
+                        case 10: COMP2_SEL_PA2(); COMP2_EXTI_FALLING(); break; 
+                        case 11: COMP2_SEL_PA4(); COMP2_EXTI_RISING(); break;  
+                    }
+                }
+                
                 BSP_COMP2_Start_IT();
         		ESHL_state = (ESHL_direction == ESHL_CLOCKWISE) ? ESHL_STATE_RUN_CLOCKWISE : ESHL_STATE_RUN_COUNTER_CLOCKWISE;//电调状态更新为对应方向运动状态
 			}
@@ -655,27 +784,8 @@ void ESHL_Start(ESHL_DIRECTION_ENUM_T direction)
 		  }
 		  ESHL_U_D_Ctrl(ESHL_run_pwm);
 
-        /* ---- 通道轮转：每 8 步换相切换到下一个比较器输入通道 ---- */
-        diag_step_cnt++;
-        if (diag_step_cnt >= 8) {
-            diag_step_cnt = 0;
-            diag_chan = (diag_chan + 1) % 3;
-            switch (diag_chan) {
-                case 0: COMP2_SEL_PA4(); break;
-                case 1: COMP2_SEL_PA2(); break;
-                case 2: COMP2_SEL_PA5(); break;
-            }
-            EXTI->PR = EXTI_PR_PR22; /* 清除通道切换产生的虚假挂起标志 */
-        }
-
-        /* ---- 分通道累计过零事件 ---- */
     	if (SENSE_H) {
     		BMEF_num ++;
-            switch (diag_chan) {
-                case 0: bmef_pa4++; break;
-                case 1: bmef_pa2++; break;
-                case 2: bmef_pa5++; break;
-            }
     	}
 
     }

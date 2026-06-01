@@ -35,12 +35,12 @@ void BSP_COMP2_Init(void)
 
     // 【修正处】选择反相输入端 (Vin-) 为 PA2
     // 在F051中，110 = COMP2_INM6 = PA2
-    //COMP->CSR |= (COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_1); 
     COMP->CSR &= ~COMP_CSR_COMP2INSEL; 
 
+    COMP->CSR |= (COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_1); //PA2
 	// 2. 仅置位第 2 位 (二进制 100)
-	COMP->CSR |= COMP_CSR_COMP2INSEL_2; //PA4
-	//COMP->CSR |= (COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_0);
+	//COMP->CSR |= COMP_CSR_COMP2INSEL_2; //PA4
+	//COMP->CSR |= (COMP_CSR_COMP2INSEL_2 | COMP_CSR_COMP2INSEL_0);//PA5
 	
 	
     //COMP->CSR |= COMP_CSR_COMP2HYST_0;  // 写入 01，配置为低迟滞 (Low Hysteresis)
@@ -72,24 +72,18 @@ void BSP_COMP2_Init(void)
 // 外部声明您编写的纯寄存器版分时复用换相回调函数
 extern void BLDC_COMP2_TriggerCallback(void);
 
-
-int a;
-
 void ADC1_COMP_IRQHandler(void)
 {
     // 【修改处】：双重校验！
     // 不仅要确认发生了跳变 (PR == 1)
     // 还必须确认软件当前确实开启了这个中断 (IMR == 1)
     if( ((EXTI->PR & EXTI_PR_PR22) != 0) && ((EXTI->IMR & EXTI_IMR_MR22) != 0) ) 
-    {
-		a++;
-        // 必须第一时间清除，防止后续被换相尖峰干扰
-        EXTI->PR = EXTI_PR_PR22;
-        
+    {   
         // 只有 IMR 和 PR 同时为 1，才去执行闭环换相
         BLDC_COMP2_TriggerCallback();
+        // 必须第一时间清除，防止后续被换相尖峰干扰
+        EXTI->PR = EXTI_PR_PR22;
     }
-    
     // 如果你有处理 ADC 中断的逻辑，可以接着写在这里
     // 比如：if (ADC1->ISR & ADC_ISR_EOC) { ... }
 }
@@ -113,7 +107,7 @@ void BSP_COMP2_Start_IT(void)
      * 第三步：恢复边沿检测功能
      * ================================================================================= */
     EXTI->RTSR |= EXTI_RTSR_TR22;
-    EXTI->FTSR |= EXTI_FTSR_TR22;
+    //EXTI->FTSR |= EXTI_FTSR_TR22;
 
     /* =================================================================================
      * 第四步：清除由于上电建立时间产生的虚假挂起标志位 (必须在开启 IMR 前清理)
