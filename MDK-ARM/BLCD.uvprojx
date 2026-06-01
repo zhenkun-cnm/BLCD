@@ -412,9 +412,49 @@
               <FilePath>../Src/stm32f0xx_hal_msp.c</FilePath>
             </File>
             <File>
-              <FileName>CLAUDE.md</FileName>
-              <FileType>9</FileType>
-              <FilePath>..\CLAUDE.md</FilePath>
+              <FileName>bldc_debug.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_debug.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_clock.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_clock.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_led.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_led.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_pwm.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_gpio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_gpio.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_adc.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_time.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_time.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_driver.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_driver.c</FilePath>
+            </File>
+            <File>
+              <FileName>bldc_comp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Src\bldc_comp.c</FilePath>
             </File>
           </Files>
         </Group>
