@@ -1,0 +1,221 @@
+version: "4.1"
+name: ESHL
+type: ARM
+deviceName: STM32F051K8Ux
+packDir: null
+srcDirs:
+  - Core/Src
+  - Core/Startup
+  - Driver
+  - Drivers/STM32F0xx_HAL_Driver/Src
+virtualFolder:
+  name: <virtual_root>
+  files: []
+  folders:
+    - name: Core
+      files: []
+      folders:
+        - name: Inc
+          files: []
+          folders: []
+        - name: Src
+          files: []
+          folders: []
+        - name: Startup
+          files: []
+          folders: []
+    - name: Driver
+      files: []
+      folders: []
+    - name: Drivers
+      files: []
+      folders:
+        - name: CMSIS
+          files: []
+          folders:
+            - name: Include
+              files: []
+              folders: []
+            - name: Device
+              files: []
+              folders:
+                - name: ST
+                  files: []
+                  folders:
+                    - name: STM32F0xx
+                      files: []
+                      folders:
+                        - name: Include
+                          files: []
+                          folders: []
+        - name: STM32F0xx_HAL_Driver
+          files: []
+          folders:
+            - name: Inc
+              files: []
+              folders: []
+            - name: Src
+              files: []
+              folders: []
+dependenceList: []
+outDir: build\eide
+miscInfo:
+  lastBuildTime: 0
+  uid: e587c3a2f01b4d8e9c6d5a4b3f2e1d0c
+targets:
+  Debug:
+    cppPreprocessAttrs:
+      defineList:
+        - DEBUG
+        - USE_HAL_DRIVER
+        - STM32F051x8
+      incList:
+        - Core/Inc
+        - Drivers/STM32F0xx_HAL_Driver/Inc
+        - Drivers/STM32F0xx_HAL_Driver/Inc/Legacy
+        - Drivers/CMSIS/Device/ST/STM32F0xx/Include
+        - Drivers/CMSIS/Include
+        - Driver
+      libList: []
+    excludeList: []
+    settings:
+      debugger: cortex-debug
+    toolchain: GCC
+    toolchainConfigMap:
+      GCC:
+        archExtensions: ""
+        cpuType: Cortex-M0
+        floatingPointHardware: default
+        options:
+          version: 5
+          afterBuildTasks:
+            - name: Generate HEX
+              cmd: arm-none-eabi-objcopy -Oihex ${projOutputPath}.elf ${projOutputPath}.hex
+            - name: Generate BIN
+              cmd: arm-none-eabi-objcopy -Obinary ${projOutputPath}.elf ${projOutputPath}.bin
+          asm-compiler:
+            ASM_FLAGS: -x assembler-with-cpp
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            CXX_FLAGS: ""
+            C_FLAGS: ""
+            language-c: c11
+            language-cpp: c++17
+            one-elf-section-per-data: true
+            one-elf-section-per-function: true
+            optimization: level-debug
+            warnings: all-warnings
+          global:
+            $float-abi-type: softfp
+            misc-control: --specs=nosys.specs --specs=nano.specs
+            output-debug-info: enable
+          linker:
+            LD_FLAGS: ""
+            LIB_FLAGS: -lm
+            output-format: elf
+            remove-unused-input-sections: true
+        scatterFilePath: .\STM32F051K8UX_FLASH.ld
+        storageLayout:
+          RAM:
+            - id: 1
+              isChecked: "1"
+              mem:
+                size: "0x2000"
+                startAddr: "0x20000000"
+              noInit: false
+              tag: IRAM
+          ROM:
+            - id: 1
+              isChecked: "1"
+              isStartup: true
+              mem:
+                size: "0x10000"
+                startAddr: "0x08000000"
+              tag: IROM
+        useCustomScatterFile: true
+    uploadConfigMap:
+      OpenOCD:
+        baseAddr: "0x08000000"
+        bin: ""
+        interface: cmsis-dap
+        target: stm32f0x
+    uploader: OpenOCD
+  Release:
+    cppPreprocessAttrs:
+      defineList:
+        - USE_HAL_DRIVER
+        - STM32F051x8
+      incList:
+        - Core/Inc
+        - Drivers/STM32F0xx_HAL_Driver/Inc
+        - Drivers/STM32F0xx_HAL_Driver/Inc/Legacy
+        - Drivers/CMSIS/Device/ST/STM32F0xx/Include
+        - Drivers/CMSIS/Include
+        - Driver/
+      libList: []
+    excludeList: []
+    settings:
+      debugger: cortex-debug
+    toolchain: GCC
+    toolchainConfigMap:
+      GCC:
+        cpuType: Cortex-M0
+        floatingPointHardware: default
+        options:
+          version: 5
+          afterBuildTasks:
+            - name: Generate HEX
+              cmd: arm-none-eabi-objcopy -Oihex ${projOutputPath}.elf ${projOutputPath}.hex
+            - name: Generate BIN
+              cmd: arm-none-eabi-objcopy -Obinary ${projOutputPath}.elf ${projOutputPath}.bin
+          asm-compiler:
+            ASM_FLAGS: -x assembler-with-cpp
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            CXX_FLAGS: ""
+            C_FLAGS: ""
+            language-c: c11
+            language-cpp: c++17
+            one-elf-section-per-data: true
+            one-elf-section-per-function: true
+            optimization: level-size
+            warnings: all-warnings
+          global:
+            $float-abi-type: softfp
+            misc-control: --specs=nosys.specs --specs=nano.specs
+            output-debug-info: disable
+          linker:
+            LD_FLAGS: ""
+            LIB_FLAGS: -lm
+            output-format: elf
+            remove-unused-input-sections: true
+        scatterFilePath: .\STM32F051K8UX_FLASH.ld
+        storageLayout:
+          RAM:
+            - id: 1
+              isChecked: "1"
+              mem:
+                size: "0x2000"
+                startAddr: "0x20000000"
+              noInit: false
+              tag: IRAM
+          ROM:
+            - id: 1
+              isChecked: "1"
+              isStartup: true
+              mem:
+                size: "0x10000"
+                startAddr: "0x08000000"
+              tag: IROM
+        useCustomScatterFile: true
+    uploadConfigMap:
+      OpenOCD:
+        baseAddr: "0x08000000"
+        bin: ""
+        cpuInfo:
+          cpuName: STM32F051K8
+          vendor: ST
+        otherCmds: -f interface/cmsis-dap.cfg -f target/stm32f0x.cfg
+        proType: 0
+        speed: 4000
+    uploader: OpenOCD
