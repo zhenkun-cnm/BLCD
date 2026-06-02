@@ -11,7 +11,7 @@
 
 #define ESHL_RX_PACK_LEN 50         //电调接收缓存大小
 #define ESHL_TX_PACK_LEN 20         //电调发送缓存大小
-#define ESHL_DATA_PACK_MAX_LEN 11   //电调数据包最大长度
+#define ESHL_DATA_PACK_MAX_LEN 16   //电调数据包最大长度(合校验1字节替换CRC16的2字节)
 
 
 

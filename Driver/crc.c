@@ -2,21 +2,60 @@
  * Robofuture RM Team
  * File name: crc.c
  * Author: Zhb        Version: 1.0        Date: 2021/4/6
- * Description: crc校验
+ * Description: crc校验 / 合校验
  * Function List:
- *   1. get_crc8_check_sum 计算crc8校验值
- *   2. verify_crc8_check_sum 检查crc8校验码
- *   3. append_crc8_check_sum 在数据末添加crc8校验
- *   4. get_crc16_check_sum 计算crc16校验值
- *   5. verify_crc16_check_sum 检查crc16校验码
- *   6. append_crc16_check_sum 在数据末添加crc16校验
+ *   1. get_checksum    计算合校验(累加和低8位)
+ *   2. verify_checksum 验证合校验
+ *   3. append_checksum 在数据末添加合校验
+ *   4. get_crc8_check_sum  计算crc8校验值  (legacy, #ifdef ESHL_CRC_LEGACY)
+ *   5. verify_crc8_check_sum                         (legacy)
+ *   6. append_crc8_check_sum                         (legacy)
+ *   7. get_crc16_check_sum                           (legacy)
+ *   8. verify_crc16_check_sum                        (legacy)
+ *   9. append_crc16_check_sum                        (legacy)
  * History:
  *      <author> <time>  <version > <desc>
  *        Zhb   21/04/06  1.0       首次提交
-*******************************************************************************/
+ *******************************************************************************/
 
 /* 包含头文件 ----------------------------------------------------------------*/
 #include "crc.h"
+
+/* ── 合校验 (累加和, 取低8位) ──────────────────────────── */
+
+uint8_t get_checksum(uint8_t *pchMessage, uint16_t dwLength)
+{
+    uint8_t sum = 0;
+    if (pchMessage == NULL) return 0;
+    while (dwLength--)
+    {
+        sum += *pchMessage++;
+    }
+    return sum;
+}
+
+uint8_t verify_checksum(uint8_t *pchMessage, uint16_t dwLength)
+{
+    if ((pchMessage == NULL) || (dwLength <= 1)) return 0;
+    uint8_t expected = get_checksum(pchMessage, dwLength);
+    for (size_t i = 0; i < dwLength+1; i++)
+    {
+        printf("%02X ", pchMessage[i]);
+    }
+    printf("\r\n");
+    printf("Expected checksum: 0x%02X, Received checksum: 0x%02X\r\n", expected, pchMessage[dwLength]);
+    return (expected == pchMessage[dwLength]);
+}
+
+void append_checksum(uint8_t *pchMessage, uint16_t dwLength)
+{
+    if ((pchMessage == NULL) || (dwLength <= 1)) return;
+    pchMessage[dwLength - 1] = get_checksum(pchMessage, dwLength - 1);
+}
+
+/* ── 旧 CRC8/CRC16 — 仅在定义 ESHL_CRC_LEGACY 时编译 ──── */
+
+#ifdef ESHL_CRC_LEGACY
 
 /* 私有变量 ------------------------------------------------------------------*/
 //crc8 generator polynomial:G(x)=x8+x5+x4+1
@@ -78,11 +117,7 @@ const uint16_t wCRC_Table[256] =
     0x7bc7, 0x6a4e, 0x58d5, 0x495c, 0x3de3, 0x2c6a, 0x1ef1, 0x0f78
 };
 /* 函数体 --------------------------------------------------------------------*/
-/*
-** Descriptions: CRC8 checksum function
-** Input: Data to check,Stream length, initialized checksum
-** Output: CRC checksum
-*/
+
 uint8_t get_crc8_check_sum(uint8_t* pchMessage, uint16_t dwLength, uint8_t ucCRC8)
 {
     uint8_t ucIndex;
@@ -94,26 +129,15 @@ uint8_t get_crc8_check_sum(uint8_t* pchMessage, uint16_t dwLength, uint8_t ucCRC
     return (ucCRC8);
 }
 
-/*
-** Descriptions: CRC8 Verify function
-** Input: Data to Verify,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
 uint8_t verify_crc8_check_sum(uint8_t* pchMessage, uint16_t dwLength)
 {
     uint8_t ucExpected = 0;
     if ((pchMessage == 0) || (dwLength <= 2))
         return 0;
     ucExpected = get_crc8_check_sum(pchMessage, dwLength - 1, CRC8_INIT);
-    //printf("Expected crc8=0x%x\n",ucExpected);
     return (ucExpected == pchMessage[dwLength - 1]);
 }
 
-/*
-** Descriptions: append CRC8 to the end of data
-** Input: Data to CRC and append,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
 void append_crc8_check_sum(uint8_t* pchMessage, uint16_t dwLength)
 {
     uint8_t ucCRC = 0;
@@ -123,11 +147,6 @@ void append_crc8_check_sum(uint8_t* pchMessage, uint16_t dwLength)
     pchMessage[dwLength - 1] = ucCRC;
 }
 
-/*
-** Descriptions: CRC16 checksum function
-** Input: Data to check,Stream length, initialized checksum
-** Output: CRC checksum
-*/
 uint16_t get_crc16_check_sum(uint8_t* pchMessage, uint32_t dwLength, uint16_t wCRC)
 {
     uint8_t chData;
@@ -143,11 +162,6 @@ uint16_t get_crc16_check_sum(uint8_t* pchMessage, uint32_t dwLength, uint16_t wC
     return wCRC;
 }
 
-/*
-** Descriptions: CRC16 Verify function
-** Input: Data to Verify,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
 uint8_t verify_crc16_check_sum(uint8_t* pchMessage, uint32_t dwLength)
 {
     uint16_t wExpected = 0;
@@ -156,15 +170,9 @@ uint8_t verify_crc16_check_sum(uint8_t* pchMessage, uint32_t dwLength)
         return 0;
     }
     wExpected = get_crc16_check_sum(pchMessage, dwLength - 2, CRC_INIT);
-    //printf("Expected crc16=0x%x\n",wExpected);
     return ((wExpected & 0xff) == pchMessage[dwLength - 2] && ((wExpected >> 8) & 0xff) == pchMessage[dwLength - 1]);
 }
 
-/*
-** Descriptions: append CRC16 to the end of data
-** Input: Data to CRC and append,Stream length = Data + checksum
-** Output: True or False (CRC Verify Result)
-*/
 void append_crc16_check_sum(uint8_t* pchMessage, uint32_t dwLength)
 {
     uint16_t wCRC = 0;
@@ -176,3 +184,5 @@ void append_crc16_check_sum(uint8_t* pchMessage, uint32_t dwLength)
     pchMessage[dwLength - 2] = (uint8_t)(wCRC & 0x00ff);
     pchMessage[dwLength - 1] = (uint8_t)((wCRC >> 8) & 0x00ff);
 }
+
+#endif /* ESHL_CRC_LEGACY */

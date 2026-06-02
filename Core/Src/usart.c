@@ -3,7 +3,7 @@
   ******************************************************************************
   * @file    usart.c
   * @brief   This file provides code for the configuration
-  *          of the USART instances.
+  * of the USART instances.
   ******************************************************************************
   * @attention
   *
@@ -50,7 +50,9 @@ void MX_USART1_UART_Init(void)
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_HalfDuplex_Init(&huart1) != HAL_OK)
+  
+  // 【修改处 1】：使用标准的全双工初始化，不再使用 HAL_HalfDuplex_Init
+  if (HAL_UART_Init(&huart1) != HAL_OK) 
   {
     Error_Handler();
   }
@@ -75,9 +77,11 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     __HAL_RCC_GPIOA_CLK_ENABLE();
     /**USART1 GPIO Configuration
     PA9     ------> USART1_TX
+    PA10    ------> USART1_RX
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_9;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    // 【修改处 2】：同时初始化 PA9(TX) 和 PA10(RX)，并改为推挽复用 (AF_PP)
+    GPIO_InitStruct.Pin = GPIO_PIN_9 | GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP; 
     GPIO_InitStruct.Pull = GPIO_PULLUP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF1_USART1;
@@ -140,8 +144,10 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 
     /**USART1 GPIO Configuration
     PA9     ------> USART1_TX
+    PA10    ------> USART1_RX
     */
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_9);
+    // 【修改处 3】：同时解除 PA9 和 PA10 的初始化
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_9 | GPIO_PIN_10);
 
     /* USART1 DMA DeInit */
     HAL_DMA_DeInit(uartHandle->hdmarx);
@@ -159,16 +165,12 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 
 #include "communication_management.h"
 
+// 【修改处 4】：极简版全双工 printf 重定向，不干扰接收！
 int _write(int file, char *ptr, int len)
 {
     (void)file;
-
-    ESHL_CommunicationStop();                            // 停止 DMA 接收
-    HAL_HalfDuplex_EnableTransmitter(&ESHL_UART);        // 切换到发送模式
-    HAL_UART_Transmit(&ESHL_UART, (uint8_t *)ptr, len, 100); // 阻塞发送全部字节
-    while (!(USART1->ISR & USART_ISR_TC));               // 等待移位寄存器发送完成
-    ESHL_CommunicationStart();                           // 切回接收模式，重启 DMA
-
+    // 全双工模式下，直接调用阻塞发送即可，完全不会打断 DMA 接收
+    HAL_UART_Transmit(&huart1, (uint8_t *)ptr, len, 100); 
     return len;
 }
 

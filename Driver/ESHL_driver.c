@@ -434,8 +434,6 @@ void ESHL_Start(ESHL_DIRECTION_ENUM_T direction)
     }
 }
 
-extern uint32_t close_num;
-extern uint32_t comp_num;
 uint16_t step_num[12];
 
 void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
@@ -443,7 +441,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 	uint8_t sense = 0;
 	
 	__disable_irq();
-	comp_num++;
 	do
 	{
 		if(SENSE_H) sense = 1; else sense = 0;
@@ -484,7 +481,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 			else
 			{
 				step_num[3]++;
-				close_num++;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
 			}
 			break;
@@ -496,7 +492,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 				ESHL_step++;
 				ESHL_step %= 6;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
-				close_num++;
 				step_num[4]++;
 				ESHL_COMP.Instance->CSR = (ESHL_COMP.Instance->CSR & ~(0x7 << 4U)) | (0x06 << 4U);//下一步检测A相电动势,切换比较器输入端为PA2
 				CLEAR_BIT(EXTI->RTSR, COMP_EXTI_LINE_COMP2);//下降沿触发
@@ -505,7 +500,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 			else
 			{
 				step_num[5]++;
-				close_num++;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
 			}
 			break;
@@ -518,7 +512,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 				ESHL_step++;
 				ESHL_step %= 6;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
-				close_num++;
 				ESHL_COMP.Instance->CSR = (ESHL_COMP.Instance->CSR & ~(0x7 << 4U)) | (0x05 << 4U);//下一步检测C相电动势,切换比较器输入端为PA5
 				SET_BIT(EXTI->RTSR, COMP_EXTI_LINE_COMP2);   //上升沿触发
 				CLEAR_BIT(EXTI->FTSR, COMP_EXTI_LINE_COMP2);
@@ -526,7 +519,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 			else
 			{
 				step_num[7]++;
-				close_num++;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
 			}
 			break;
@@ -538,14 +530,12 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 				ESHL_step++;
 				ESHL_step %= 6;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
-				close_num++;
 				ESHL_COMP.Instance->CSR = (ESHL_COMP.Instance->CSR & ~(0x7 << 4U)) | (0x04 << 4U);//下一步检测B相电动势,切换比较器输入端为PA4
 				CLEAR_BIT(EXTI->RTSR, COMP_EXTI_LINE_COMP2);//下降沿触发
 				SET_BIT(EXTI->FTSR, COMP_EXTI_LINE_COMP2);
 			}
 			else
 			{
-				close_num++;
 				step_num[9]++;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
 			}
@@ -559,7 +549,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 				ESHL_step++;
 				ESHL_step %= 6;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
-				close_num++;
 				ESHL_COMP.Instance->CSR = (ESHL_COMP.Instance->CSR & ~(0x7 << 4U)) | (0x06 << 4U);//下一步检测A相电动势,切换比较器输入端为PA2
 				SET_BIT(EXTI->RTSR, COMP_EXTI_LINE_COMP2);   //上升沿触发
 				CLEAR_BIT(EXTI->FTSR, COMP_EXTI_LINE_COMP2);
@@ -567,7 +556,6 @@ void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
 			else
 			{
 				step_num[11]++;
-				close_num++;
 				ESHL_U_D_Ctrl(ESHL_run_pwm);
 			}
 			break;

@@ -71,8 +71,9 @@ uint32_t close_num = 0;
 uint32_t comp_num = 0;
 extern uint16_t ESHL_RunPWMBuff;   //电调运行pwm缓存
 extern ESHL_PROTOCOL_PACK_ANALYSIS_T recv_str;
-extern uint8_t ESHL_step;
 extern uint16_t step_num[12];
+uint8_t test_rx_buffer[100]; // 测试用的接收缓存
+
 /* USER CODE END 0 */
 
 /**
@@ -200,6 +201,9 @@ int main(void)
   if (ESHL_GetState() == ESHL_STATE_OFF) {//初始化无错误
     ESHL_SetState(EShl_STATE_READY);//将电调状态设置为准备就绪
   }
+
+  printf("ESHL ESC initialized successfully, waiting for host commands...\r\n");
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -207,8 +211,8 @@ int main(void)
   while (1)
   {
     //ESHL_RuningCurrentVBATChack();//电流和电池电压检测
+    ESHL_CommunicationDataProcessing();//通信数据处理
     switch (ESHL_GetState()) {
-      //printf("Current State: %d\r\n", ESHL_GetState());
       case ESHL_STATE_OFF://电调关闭
         ESHL_CloseMOSComp();//关闭所有MOS管并且关闭比较器
         WS2812_SetAll(&ESHL_StateLed,0,0,0);
@@ -218,13 +222,11 @@ int main(void)
       {
         static uint8_t comm_started = 0;
         WS2812_SetAll(&ESHL_StateLed,0,15,0);//状态指示灯设为绿色
-                     ESHL_RunPWMBuff = 80;
-                    ESHL_SetDirection(ESHL_CLOCKWISE);//方向设为顺时针
-                    //ESHL_SetState(ESHL_STATE_START);
-        if (!comm_started) {
-          ESHL_CommunicationStart();//只启动一次通信,避免反复重置DMA
-          comm_started = 1;
+        if (comm_started == 0) {
+            ESHL_CommunicationStart();
+            comm_started = 1; // 执行完后立刻置为 1，以后再也不进来了
         }
+        //ESHL_CommunicationStart();//只启动一次通信,避免反复重置DMA
         break;
       }
 
@@ -270,16 +272,6 @@ int main(void)
         ESHL_CommunicationSendCode(ESHL_PROTOCOL_CMD_ERROR,0XE3);//发送电调错误码
         ESHL_CommunicationStart();//开启接收
         printf("Motor stopped during running, possible cause: motor stall or sudden load increase\r\n");
-        // printf("close_num: %ld\r\n", close_num);
-        // close_num = 0;
-        printf("step_num: [");
-        for (int i = 0; i < 12; i++) {
-            printf("%d - ", step_num[i]);
-        }
-        printf("]\r\n");
-        printf("comp_num: %ld\r\n", comp_num);
-        comp_num = 0;
-        printf("ESHL_step: %d\r\n",ESHL_step);
         ESHL_CloseMOSComp();//关闭所有MOS管并且关闭比较器
         ESHL_Start(ESHL_GetDirection());//开环启动
         break;
@@ -354,7 +346,6 @@ int main(void)
       default:
         break;
     }
-    //ESHL_CommunicationDataProcessing();//通信数据处理
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

@@ -7,7 +7,7 @@
 /*电调在通信过程中始终作为从机
 
 构成:
-帧头[0]+电调地址[1]+数据包长[3]+命令码[4]+数据[5]+整包CRC16校验码
+帧头[0]+电调地址[1]+数据包长[3]+命令码[4]+数据[5]+合校验码[1字节,累加和低8位]
 
 帧头:
 主机→电调:  0XEC
@@ -100,7 +100,7 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
             dat_len += 4;
             dat_len += 2;
             pack[3] = dat_len;
-            append_crc16_check_sum(pack,dat_len);//CRC16校验码
+            append_checksum(pack,dat_len);//合校验
             break;
 
         case ESHL_PROTOCOL_CMD_ESC_OFF://关闭电调
@@ -108,7 +108,7 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
             dat_len += 1;
             dat_len += 2;
             pack[3] = dat_len;
-            append_crc16_check_sum(pack,dat_len);//CRC16校验码
+            append_checksum(pack,dat_len);//合校验
             break;
 
         case ESHL_PROTOCOL_CMD_ESC_ON://启动电调
@@ -116,7 +116,7 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
             dat_len += 1;
             dat_len += 2;
             pack[3] = dat_len;
-            append_crc16_check_sum(pack,dat_len);//CRC16校验码
+            append_checksum(pack,dat_len);//合校验
             break;
 
         case ESHL_PROTOCOL_CMD_BREAK://电调刹车
@@ -124,7 +124,7 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
             dat_len += 1;
             dat_len += 2;
             pack[3] = dat_len;
-            append_crc16_check_sum(pack,dat_len);//CRC16校验码
+            append_checksum(pack,dat_len);//合校验
             break;
 
         case ESHL_PROTOCOL_CMD_CURRENT_LIMIT://更改电调运行电流限制
@@ -133,7 +133,7 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
             dat_len += 2;
             dat_len += 2;
             pack[3] = dat_len;
-            append_crc16_check_sum(pack,dat_len);//CRC16校验码
+            append_checksum(pack,dat_len);//合校验
             break;
 
         case ESHL_PROTOCOL_CMD_ERROR://电调异常
@@ -141,7 +141,7 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
             dat_len += 1;
             dat_len += 2;
             pack[3] = dat_len;
-            append_crc16_check_sum(pack,dat_len);//CRC16校验码
+            append_checksum(pack,dat_len);//合校验
             break;
 
         case ESHL_PROTOCOL_CMD_CHANGE_ADDR://更改电调地址
@@ -150,7 +150,7 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
             dat_len += 2;
             dat_len += 2;
             pack[3] = dat_len;
-            append_crc16_check_sum(pack,dat_len);//CRC16校验码
+            append_checksum(pack,dat_len);//合校验
             break;
 
         default:
@@ -160,7 +160,8 @@ void ESHL_ProtocolPackMake(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* dat_str,
 
 
 //提取数据包地址和帧头和包长
-//返回CRC校验结果0或1,帧头不匹配返回0
+//返回校验结果0或1,帧头不匹配返回0
+//@deprecated: 解析逻辑已移至 communication_management.c 的 ESHL_CommunicationDataProcessing()
 uint8_t ESHL_ProtocolAnalysisAddr(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* analysis_str) {
     if ((pack == NULL) || (analysis_str == NULL)) {return 0;}
 
@@ -168,7 +169,7 @@ uint8_t ESHL_ProtocolAnalysisAddr(uint8_t* pack,ESHL_PROTOCOL_PACK_ANALYSIS_T* a
         return 0;
     }
 
-    if(verify_crc16_check_sum(pack,pack[3])) {//CRC16校验
+    if(verify_checksum(pack,pack[3])) {//合校验
         analysis_str->head = pack[0];
         analysis_str->addr = (pack[1] << 8) | pack[2];
         analysis_str->len = pack[3];

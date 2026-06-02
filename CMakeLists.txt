@@ -45,8 +45,8 @@ elseif ("${CMAKE_BUILD_TYPE}" STREQUAL "MinSizeRel")
     message(STATUS "Maximum optimization for size")
     add_compile_options(-Os)
 else ()
-    message(STATUS "Minimal optimization, debug info included")
-    add_compile_options(-Og -g)
+    message(STATUS "Optimization for size, debug info included")
+    add_compile_options(-Os -g)
 endif ()
 
 include_directories(Core/Inc Drivers/STM32F0xx_HAL_Driver/Inc Drivers/STM32F0xx_HAL_Driver/Inc/Legacy Drivers/CMSIS/Device/ST/STM32F0xx/Include Drivers/CMSIS/Include

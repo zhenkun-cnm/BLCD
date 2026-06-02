@@ -57,6 +57,8 @@
 #define ESHL_PROTOCOL_CMD_CURRENT_LIMIT 0xC5     //更改电调运行电流限制ADC值,uint16_t类型
 #define ESHL_PROTOCOL_CMD_ERROR         0xC6     //电调异常,表示数据包传输电调异常代码，uint8_t类型，1字节
 #define ESHL_PROTOCOL_CMD_CHANGE_ADDR   0xC7     //更改电调地址,主机用广播地址发送此命令,更改地址时,所有已连接的电调地址都需要重新设置
+#define ESHL_PROTOCOL_CMD_HELP          0xC8     //帮助命令(调试用),printf输出所有命令列表,跳过合校验
+#define ESHL_PROTOCOL_CMD_CHECKSUM      0xC9     //算合校验命令(调试用),计算payload的合校验值并printf返回,跳过合校验
 
 
 #define ESHL_PROTOCOL_ERROR_CODE_MOS            0xE0     //MOS异常

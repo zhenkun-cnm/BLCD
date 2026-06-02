@@ -13,3 +13,6 @@
 # eide template
 *.ept
 *.eide-template
+
+# build output (minsize)
+/build_minsize
