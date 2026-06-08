@@ -43,9 +43,11 @@ void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+  /* DMA1_Channel1_IRQn: ADC DMA — 禁用 NVIC 中断，防止约 27700 次/秒的传输完成中断
+   * 干扰 COMP2 过零响应（ADC1/COMP2 共享同一 IRQ 向量）。
+   * DMA 电路仍在后台循环工作，adc_dma_buf 持续刷新，只是不产生 CPU 中断。 */
+  // HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  // HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
   /* DMA1_Channel2_3_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);

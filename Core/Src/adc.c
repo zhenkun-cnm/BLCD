@@ -47,15 +47,15 @@ void MX_ADC_Init(void)
   hadc.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
   hadc.Init.Resolution = ADC_RESOLUTION_12B;
   hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
+  hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_BACKWARD;
   hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  hadc.Init.LowPowerAutoWait = DISABLE;
+  hadc.Init.LowPowerAutoWait = ENABLE;
   hadc.Init.LowPowerAutoPowerOff = DISABLE;
   hadc.Init.ContinuousConvMode = ENABLE;
   hadc.Init.DiscontinuousConvMode = DISABLE;
   hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc.Init.DMAContinuousRequests = DISABLE;
+  hadc.Init.DMAContinuousRequests = ENABLE;
   hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
   if (HAL_ADC_Init(&hadc) != HAL_OK)
   {
@@ -80,7 +80,16 @@ void MX_ADC_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN ADC_Init 2 */
-
+  /* AWD 硬件过流保护：监控 PA1(IN1) 电流通道，超过阈值触发 ADC1_COMP_IRQn
+   * 阈值 1158 = ESHL_RUN_Current_Limit_ADC_DEFALT，对应约 37A
+   * 中断使能在 ESHL_ESC_Init 中通过 __HAL_ADC_ENABLE_IT 动态控制 */
+  ADC_AnalogWDGConfTypeDef AnalogWDGConfig = {0};
+  AnalogWDGConfig.WatchdogMode  = ADC_ANALOGWATCHDOG_SINGLE_REG;
+  AnalogWDGConfig.Channel       = ADC_CHANNEL_0;
+  AnalogWDGConfig.ITMode        = ENABLE;
+  AnalogWDGConfig.HighThreshold = 1158;
+  AnalogWDGConfig.LowThreshold  = 0;
+  HAL_ADC_AnalogWDGConfig(&hadc, &AnalogWDGConfig);
   /* USER CODE END ADC_Init 2 */
 
 }
@@ -114,8 +123,8 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* adcHandle)
     hdma_adc.Init.PeriphInc = DMA_PINC_DISABLE;
     hdma_adc.Init.MemInc = DMA_MINC_ENABLE;
     hdma_adc.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
-    hdma_adc.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;
-    hdma_adc.Init.Mode = DMA_NORMAL;
+    hdma_adc.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+    hdma_adc.Init.Mode = DMA_CIRCULAR;
     hdma_adc.Init.Priority = DMA_PRIORITY_LOW;
     if (HAL_DMA_Init(&hdma_adc) != HAL_OK)
     {

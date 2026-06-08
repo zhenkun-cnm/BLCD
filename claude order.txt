@@ -1,0 +1,769 @@
+# ESHL_driver 重构指令文档
+# 目标芯片: STM32F051, 电流采样: PA0(ADC_IN0), 电压采样: PA1(ADC_IN1)
+# 文件: ESHL_driver.c / ESHL_driver.h
+# 要求: 保留所有原有功能，只做增量修改，不删除业务逻辑
+
+---
+
+## 一、ESHL_driver.h 修改清单
+
+### 1.1 在现有宏定义区末尾（ESHL_OPEN_LOOP_RESTART_MAX_NUM 之后）新增以下宏
+
+```c
+/* ========== ADC 模拟看门狗 (AWD) 过流保护配置 ========== */
+// AWD 监控通道: PA0 = ADC_IN0 = 电流采样
+// 阈值计算公式: ADC = 目标电流(A) * 0.0005Ω * 50 * 4096 / 3.3 = 电流(A) * 31.30
+// ESHL_RUN_Current_Limit_ADC_DEFALT(1158) 对应约 37A，可直接复用该值作为 AWD 阈值
+#define ESHL_AWD_HIGH_THRESHOLD     ESHL_RUN_Current_Limit_ADC_DEFALT
+
+/* ========== 抖动超时保护 ========== */
+// HAL_COMP_TriggerCallback 内 do-while 抖动循环最大次数，超过则视为信号异常强制停机
+#define ESHL_DEBOUNCE_MAX_LOOPS     200
+
+/* ========== 软件 PLL 测速配置 ========== */
+// 极对数：根据实际电机修改（常见外转子无刷: 7/12/14）
+#define ESHL_MOTOR_POLE_PAIRS       7
+// 一阶低通滤波系数 (1~7，值越大滤波越强，响应越慢)
+// 新周期 = (旧周期 * (ALPHA-1) + 实测周期) / ALPHA
+#define ESHL_PLL_FILTER_ALPHA       3
+
+/* ========== 相位超前补偿配置 ========== */
+// 0=关闭(与原代码行为完全相同), 1=开启
+// 建议先关闭，等 PLL 稳定运行后再开启调试
+#define ESHL_PHASE_ADV_ENABLE       0
+// 低速阈值(RPM)：此转速以下不做超前补偿
+#define ESHL_PHASE_ADV_LOW_RPM      3000
+// 高速阈值(RPM)：此转速以上使用最大超前补偿
+#define ESHL_PHASE_ADV_HIGH_RPM     15000
+// 最大超前百分比(0~99)：在 30° 基础延迟上最多超前多少
+// 实际延迟 = (换相周期/2) * (1 - pct/100)
+#define ESHL_PHASE_ADV_MAX_PCT      40
+```
+
+### 1.2 在 ESHL_STATE_ENUM 枚举末尾（ESHL_STATE_SET_ADDR_OK 之后）新增两个状态
+
+```c
+ESHL_STATE_SIGNAL_UNSTABLE,   // 比较器信号长时间抖动（硬件异常）
+```
+
+### 1.3 在文件末尾（所有 typedef 和 extern 之后）新增结构体和 extern 声明
+
+```c
+/* ========== PLL 测速 & 运行诊断结构体 ========== */
+typedef struct {
+    volatile uint32_t last_zc_tick;            // 上次过零时 htim6 的计数值(us)
+    volatile uint32_t commutation_period_us;   // 换相周期(us)，经低通滤波
+    volatile uint32_t rpm;                     // 当前估算转速(RPM)
+    volatile uint32_t debounce_overrun_cnt;    // 抖动超时次数
+    volatile uint32_t max_debounce_loops;      // 历史最大抖动循环次数(峰值)
+    volatile uint32_t isr_call_count;          // 比较器中断进入总次数
+    volatile uint32_t overcurrent_cnt;         // AWD 过流触发次数
+    volatile uint16_t last_overcurrent_adc;    // 最近一次过流时的电流 ADC 值
+    volatile uint16_t last_lowvbat_adc;        // 最近一次低压触发时的电压 ADC 值
+    volatile uint16_t current_avg_adc;         // 当前电流滑动均值(供主循环读取)
+} ESHL_DIAG_T;
+
+extern ESHL_DIAG_T ESHL_Diag;
+```
+
+### 1.4 在函数声明区末尾新增三个 API 声明
+
+```c
+uint32_t ESHL_GetSpeedRPM(void);           // 获取当前转速(RPM)
+uint32_t ESHL_GetCommutationPeriod(void);  // 获取换相周期(us)
+void     ESHL_ResetDiag(void);             // 复位所有诊断信息
+```
+
+---
+
+## 二、ESHL_driver.c 修改清单
+
+### 2.1 文件顶部全局变量区：修改 ESHL_step 声明，新增全局变量
+
+**修改：** 将 `uint8_t ESHL_step = 0;` 改为：
+```c
+volatile uint8_t ESHL_step = 0;  // 加 volatile：中断和主循环均会访问
+```
+
+**在全局变量区末尾新增：**
+```c
+/* ========== ADC DMA 循环缓冲（替代原 adc_val_buff 的运行时使用） ========== */
+// [0] = PA0 电流 ADC 原始值（最新一次 DMA 搬运结果）
+// [1] = PA1 电压 ADC 原始值
+// 加 volatile：DMA 会在后台自动写入，编译器不得优化掉读操作
+volatile uint16_t adc_dma_buf[2] = {0};
+
+// 电流滑动均值环形缓冲（8点）
+#define CURRENT_FILTER_SIZE  8
+static volatile uint16_t current_filter_buf[CURRENT_FILTER_SIZE] = {0};
+static volatile uint8_t  current_filter_idx = 0;
+static volatile uint32_t current_filter_sum = 0;
+static volatile uint16_t current_avg = 0;  // 对外可读的最新滑动均值
+
+/* ========== PLL 诊断结构体实例 ========== */
+ESHL_DIAG_T ESHL_Diag = {0};
+```
+
+**注意：** 原有的 `uint32_t adc_val_buff[5]` 保留不删除，MOS 自检函数内部仍使用它（见 2.6 节）。
+
+---
+
+### 2.2 在 MOS_CloseAll() 函数之后、ESHL_U_D_Ctrl() 函数之前，插入换相查找表和内联函数
+
+```c
+/* ================================================================
+ * 换相查找表 commutation_table[12]
+ * 索引 = ESHL_step (0~11)
+ * 作用：替代 HAL_COMP_TriggerCallback 和 ESHL_Sync_Comp_Hardware
+ *       里原有的 12 个 switch-case 分支
+ *
+ * 字段说明：
+ *   match_sense  - 此步期望的比较器输出值，匹配则执行换相
+ *                  (1=高电平触发, 0=低电平触发)
+ *   channel_bits - 此步监听的悬空相对应 COMP CSR 通道值(已左移到位)
+ *                  0x04<<4 → PA4 (B相)
+ *                  0x05<<4 → PA5 (C相)
+ *                  0x06<<4 → PA2 (A相)
+ *   edge_rising  - EXTI 触发边沿 (1=上升沿, 0=下降沿)
+ * ================================================================ */
+typedef struct {
+    uint8_t  match_sense;
+    uint32_t channel_bits;
+    uint8_t  edge_rising;
+} commutation_lut_t;
+
+static const commutation_lut_t commutation_table[12] = {
+    /* === 正转 (Forward, step 0~5) === */
+    {1, (0x06U << 4U), 1},  // Step 0: 监听 A相(PA2), 等上升沿
+    {0, (0x05U << 4U), 0},  // Step 1: 监听 C相(PA5), 等下降沿
+    {1, (0x04U << 4U), 1},  // Step 2: 监听 B相(PA4), 等上升沿
+    {0, (0x06U << 4U), 0},  // Step 3: 监听 A相(PA2), 等下降沿
+    {1, (0x05U << 4U), 1},  // Step 4: 监听 C相(PA5), 等上升沿
+    {0, (0x04U << 4U), 0},  // Step 5: 监听 B相(PA4), 等下降沿
+    /* === 反转 (Reverse, step 6~11) === */
+    {1, (0x04U << 4U), 1},  // Step 6 : 监听 B相, 等上升沿
+    {0, (0x05U << 4U), 0},  // Step 7 : 监听 C相, 等下降沿
+    {1, (0x06U << 4U), 1},  // Step 8 : 监听 A相, 等上升沿
+    {0, (0x04U << 4U), 0},  // Step 9 : 监听 B相, 等下降沿
+    {1, (0x05U << 4U), 1},  // Step 10: 监听 C相, 等上升沿
+    {0, (0x06U << 4U), 0},  // Step 11: 监听 A相, 等下降沿
+};
+
+/* 内联工具：将 commutation_table[step] 的通道和边沿写入硬件寄存器 */
+static inline void apply_comp_config(uint8_t step)
+{
+    const commutation_lut_t *p = &commutation_table[step];
+    ESHL_COMP.Instance->CSR =
+        (ESHL_COMP.Instance->CSR & ~(0x7U << 4U)) | p->channel_bits;
+    if (p->edge_rising) {
+        SET_BIT(EXTI->RTSR,   COMP_EXTI_LINE_COMP2);
+        CLEAR_BIT(EXTI->FTSR, COMP_EXTI_LINE_COMP2);
+    } else {
+        CLEAR_BIT(EXTI->RTSR, COMP_EXTI_LINE_COMP2);
+        SET_BIT(EXTI->FTSR,   COMP_EXTI_LINE_COMP2);
+    }
+}
+
+/* 内联工具：计算两次 htim6 计数之间的 us 差值（处理 16bit 溢出） */
+static inline uint32_t calc_us_diff(uint32_t now, uint32_t last)
+{
+    return (now >= last) ? (now - last) : (0x10000UL - last + now);
+}
+
+/* 内联工具：PLL 一阶低通滤波 + RPM 计算
+ * 调用时机：每次成功换相后，传入本次换相间隔 us */
+static inline void pll_update(uint32_t diff_us)
+{
+    // 过滤异常值（过短=抖动，过长=启动期/丢步）
+    if (diff_us < 50U || diff_us > 50000U) return;
+
+    const uint32_t alpha = ESHL_PLL_FILTER_ALPHA;
+    uint32_t old = ESHL_Diag.commutation_period_us;
+    ESHL_Diag.commutation_period_us =
+        (old == 0) ? diff_us : ((old * (alpha - 1) + diff_us) / alpha);
+
+    if (ESHL_Diag.commutation_period_us > 0) {
+        // RPM = 60 * 1e6 / (6 * period_us * pole_pairs)
+        //     = 10000000 / (period_us * pole_pairs)
+        ESHL_Diag.rpm = 10000000UL /
+            (ESHL_Diag.commutation_period_us * ESHL_MOTOR_POLE_PAIRS);
+    }
+}
+
+/* 内联工具：根据当前转速计算相位超前后的实际延迟(us)
+ * ESHL_PHASE_ADV_ENABLE=0 时直接返回 0，行为与原代码完全相同 */
+static inline uint32_t calc_phase_advance_delay_us(void)
+{
+#if ESHL_PHASE_ADV_ENABLE
+    uint32_t period = ESHL_Diag.commutation_period_us;
+    if (period == 0) return 0;
+    uint32_t base_delay = period >> 1;  // 30° = 半个换相周期
+    uint32_t rpm = ESHL_Diag.rpm;
+    uint32_t pct;
+    if      (rpm <= ESHL_PHASE_ADV_LOW_RPM)  pct = 0;
+    else if (rpm >= ESHL_PHASE_ADV_HIGH_RPM) pct = ESHL_PHASE_ADV_MAX_PCT;
+    else    pct = (rpm - ESHL_PHASE_ADV_LOW_RPM) * ESHL_PHASE_ADV_MAX_PCT
+                / (ESHL_PHASE_ADV_HIGH_RPM - ESHL_PHASE_ADV_LOW_RPM);
+    uint32_t advance = base_delay * pct / 100;
+    return (base_delay > advance) ? (base_delay - advance) : 0;
+#else
+    return 0;
+#endif
+}
+```
+
+---
+
+### 2.3 完整替换 ESHL_Sync_Comp_Hardware() 函数
+
+**将原函数（约 120 行的大 switch）整体替换为：**
+
+```c
+void ESHL_Sync_Comp_Hardware(uint8_t step)
+{
+    if (step >= 12) return;           // 越界保护
+    apply_comp_config(step);          // 查表写入通道和边沿
+    // 切换通道会产生假毛刺，必须清除中断标志，否则开中断后立即误触发
+    __HAL_COMP_EXTI_CLEAR_FLAG(COMP_EXTI_LINE_COMP2);
+}
+```
+
+---
+
+### 2.4 完整替换 HAL_COMP_TriggerCallback() 函数
+
+**将原函数整体替换为以下内容：**
+
+```c
+void HAL_COMP_TriggerCallback(COMP_HandleTypeDef *hcomp)
+{
+    if (hcomp == NULL) return;
+    ESHL_Diag.isr_call_count++;
+
+    // 步数越界：ESHL_step 被异常修改，立即停机
+    if (ESHL_step >= 12) { MOS_CloseAll(); return; }
+
+    // PLL 测速：在任何阻塞操作之前采样时间戳
+    uint32_t now_us  = __HAL_TIM_GET_COUNTER(&ESHL_US_TIM);
+    uint32_t diff_us = calc_us_diff(now_us, ESHL_Diag.last_zc_tick);
+    ESHL_Diag.last_zc_tick = now_us;
+
+    uint8_t  sense = 0;
+    uint16_t debounce_loops = 0;
+
+    __disable_irq();
+    do
+    {
+        sense = SENSE_H ? 1 : 0;
+
+        // 抖动超时保护：防止信号异常时卡死在中断里
+        if (++debounce_loops > ESHL_DEBOUNCE_MAX_LOOPS) {
+            MOS_CloseAll();
+            HAL_COMP_Stop_IT(&ESHL_COMP);
+            ESHL_run_pwm = 0;
+            ESHL_state = ESHL_STATE_SIGNAL_UNSTABLE;
+            ESHL_Diag.debounce_overrun_cnt++;
+            __enable_irq();
+            return;
+        }
+
+        const commutation_lut_t *lut = &commutation_table[ESHL_step];
+
+        if (sense == lut->match_sense) {
+            // === 匹配换相条件 ===
+
+            // 相位超前补偿（ESHL_PHASE_ADV_ENABLE=0 时返回0，不阻塞）
+            uint32_t adv_delay = calc_phase_advance_delay_us();
+            if (adv_delay > 0 && adv_delay < 10000U) {
+                delay_us(&ESHL_US_TIM, (uint16_t)adv_delay);
+            }
+
+            // 步进
+            if (ESHL_step >= 6) {
+                ESHL_step = (ESHL_step >= 11) ? 6 : (ESHL_step + 1);
+                close_num++;
+            } else {
+                ESHL_step = (ESHL_step + 1) % 6;
+                step_num[(lut - commutation_table) * 2 % 12]++;
+            }
+
+            ESHL_U_D_Ctrl(ESHL_run_pwm);     // 切换 MOS 输出
+            apply_comp_config(ESHL_step);    // 查表切换比较器通道和边沿
+
+            // 更新 PLL（只有首次匹配才用，后续抖动循环清零不再更新）
+            pll_update(diff_us);
+            diff_us = 0;
+
+        } else {
+            // === 未匹配：状态未变，只刷新 PWM ===
+            if (ESHL_step >= 6) close_num++;
+            else step_num[((lut - commutation_table) * 2 + 1) % 12]++;
+            ESHL_U_D_Ctrl(ESHL_run_pwm);
+        }
+
+    } while ((SENSE_L && sense) || (SENSE_H && !sense));
+
+    // 记录峰值抖动次数（用于硬件信号质量评估）
+    if (debounce_loops > ESHL_Diag.max_debounce_loops)
+        ESHL_Diag.max_debounce_loops = debounce_loops;
+
+    __enable_irq();
+}
+```
+
+---
+
+### 2.5 修改 ESHL_ESC_Init() 函数
+
+**在函数末尾（原有初始化代码之后）追加以下内容：**
+
+```c
+    // 重置诊断信息
+    ESHL_ResetDiag();
+
+    // ★ 启动 ADC + DMA 持续循环采样（只启动一次，之后永不停止）
+    // adc_dma_buf[0] = PA0 电流，adc_dma_buf[1] = PA1 电压
+    // DMA 在后台自动刷新，CPU 无需干预
+    HAL_ADC_Start_DMA(&ESHL_Current_ADC, (uint32_t *)adc_dma_buf, 2);
+
+    // ★ 开启 ADC 模拟看门狗中断（过流硬件保护）
+    // AWD 阈值已在 CubeMX 里配置（High = ESHL_AWD_HIGH_THRESHOLD）
+    // 此处只开启中断使能，不重复配置阈值
+    __HAL_ADC_ENABLE_IT(&ESHL_Current_ADC, ADC_IT_AWD);
+```
+
+**同时删除或注释掉** ESHL_ESC_Init 内原有的以下代码块（原有的 10 次循环采样初始电压）：
+
+```c
+// 删除这段（共约 5 行）：
+for (uint8_t i = 0; i < 10; i++) {
+    HAL_ADC_Start_DMA(&ESHL_Current_ADC,adc_val_buff,2);
+    Vbat += (float)adc_val_buff[1];
+}
+```
+
+**替换为：**
+
+```c
+    // 初始化时单次读取电压（此时 DMA 尚未启动，用阻塞方式读一次）
+    HAL_ADC_Start(&ESHL_Current_ADC);
+    for (uint8_t i = 0; i < 10; i++) {
+        if (HAL_ADC_PollForConversion(&ESHL_Current_ADC, 5) == HAL_OK)
+            Vbat += (float)HAL_ADC_GetValue(&ESHL_Current_ADC);
+        if (HAL_ADC_PollForConversion(&ESHL_Current_ADC, 5) == HAL_OK)
+            (void)HAL_ADC_GetValue(&ESHL_Current_ADC); // 丢弃 IN1，只要 IN0 均值
+    }
+    HAL_ADC_Stop(&ESHL_Current_ADC);
+```
+
+**注意：** 原有 `Vbat` 计算和电池类型判断逻辑不变，只替换 ADC 采样部分。
+
+---
+
+### 2.6 在 ESHL_Start() 函数内，进入闭环前重置 PLL
+
+**找到以下代码行（ESHL_Start 函数内，开环启动成功分支）：**
+```c
+HAL_COMP_Start_IT(&ESHL_COMP);
+```
+
+**在它之前插入：**
+```c
+// 进入闭环前重置 PLL，保证测速从干净状态开始
+ESHL_Diag.last_zc_tick = __HAL_TIM_GET_COUNTER(&ESHL_US_TIM);
+ESHL_Diag.commutation_period_us = 0;
+ESHL_Diag.rpm = 0;
+```
+
+---
+
+### 2.7 完整替换 ESHL_RuningCurrentVBATChack() 函数
+
+**将原函数整体替换为：**
+
+```c
+// 电压 ADC 低压阈值查找表（整数 ADC 值，无浮点运算）
+// 计算公式反推自原代码: Vbat = adc * 3.3/4096 * 10 + 1.18
+// 反推: adc = (Vbat - 1.18) / 10 * 4096 / 3.3
+// ⚠️ 以下值需用万用表实测标定，板间 ADC 偏差较大
+static const uint16_t vbat_low_threshold_adc[4] = {
+    1232,  // ESHL_BAT_3S: 11.1V
+    1690,  // ESHL_BAT_4S: 14.8V
+    2148,  // ESHL_BAT_5S: 18.5V
+    2606,  // ESHL_BAT_6S: 22.2V
+};
+
+void ESHL_RuningCurrentVBATChack(void)
+{
+    static uint32_t last_tick    = 0;
+    static uint8_t  vbat_low_cnt = 0;  // 连续低压计数，防单次误触发
+
+    // 节流：100ms 才真正执行一次（电压变化慢，不需要更快）
+    if (HAL_GetTick() - last_tick < 100) return;
+    last_tick = HAL_GetTick();
+
+    // 电流：读 DMA 维护的滑动均值，记录到诊断（过流已由 AWD 硬件处理）
+    ESHL_Diag.current_avg_adc = current_avg;
+
+#if ESHL_VBAT_CHACK_EN
+    // 电压：直接读 DMA 缓冲中 PA1 的最新值，无需阻塞采样
+    uint16_t vbat_adc = adc_dma_buf[1];
+
+    if (ESHL_BatType <= ESHL_BAT_6S) {
+        if (vbat_adc <= vbat_low_threshold_adc[ESHL_BatType]) {
+            if (++vbat_low_cnt >= 3) {  // 连续 3 次(300ms)才停机，防误判
+                HAL_COMP_Stop_IT(&ESHL_COMP);
+                MOS_CloseAll();
+                ESHL_run_pwm = 0;
+                ESHL_state = ESHL_STATE_BATTERY_VOLTAGE_ERROR;
+                ESHL_Diag.last_lowvbat_adc = vbat_adc;
+                vbat_low_cnt = 0;
+            }
+        } else {
+            vbat_low_cnt = 0;
+        }
+    }
+#endif
+}
+```
+
+---
+
+### 2.8 在 MOS_SelfTest() 函数之前插入三个辅助函数
+
+```c
+/* ================================================================
+ * ADC 模式切换辅助函数（供 MOS_SelfTest 独占使用）
+ *
+ * 背景：正常运行时 ADC 处于 DMA 循环模式（自动采样）
+ *       MOS 自检时需要手动逐步采样，两者互斥，必须在自检前后切换
+ * ================================================================ */
+
+// 自检前调用：暂停 DMA 循环，关闭 AWD 中断
+static void ADC_SwitchToSingleMode(void)
+{
+    HAL_ADC_Stop_DMA(&ESHL_Current_ADC);
+    // 只关 AWD 中断，不改 AWD 阈值配置，恢复时直接重新开启即可
+    __HAL_ADC_DISABLE_IT(&ESHL_Current_ADC, ADC_IT_AWD);
+    HAL_Delay(1);  // 等待 DMA 真正停止
+}
+
+// 自检后调用：恢复 DMA 循环和 AWD 中断
+static void ADC_RestoreContinuousMode(void)
+{
+    __HAL_ADC_CLEAR_FLAG(&ESHL_Current_ADC, ADC_FLAG_AWD);  // 清自检期间可能产生的 AWD 标志
+    __HAL_ADC_ENABLE_IT(&ESHL_Current_ADC, ADC_IT_AWD);
+    HAL_ADC_Start_DMA(&ESHL_Current_ADC, (uint32_t *)adc_dma_buf, 2);
+}
+
+// 单次阻塞采样（自检专用，替代原来循环里的 HAL_ADC_Start_DMA）
+// 返回 0=成功, 1=超时
+// 注意：要求 CubeMX 里 ADC End Of Conversion = EOC at end of single channel conversion
+static uint8_t ADC_SampleOnce(uint16_t *out_current, uint16_t *out_vbat)
+{
+    if (HAL_ADC_Start(&ESHL_Current_ADC) != HAL_OK) return 1;
+    if (HAL_ADC_PollForConversion(&ESHL_Current_ADC, 5) != HAL_OK) {
+        HAL_ADC_Stop(&ESHL_Current_ADC); return 1;
+    }
+    if (out_current) *out_current = (uint16_t)HAL_ADC_GetValue(&ESHL_Current_ADC);
+    if (out_vbat) {
+        if (HAL_ADC_PollForConversion(&ESHL_Current_ADC, 5) != HAL_OK) {
+            HAL_ADC_Stop(&ESHL_Current_ADC); return 1;
+        }
+        *out_vbat = (uint16_t)HAL_ADC_GetValue(&ESHL_Current_ADC);
+    }
+    HAL_ADC_Stop(&ESHL_Current_ADC);
+    return 0;
+}
+
+// 单管电流测试公共逻辑（原 7 个 case 内容几乎一致，提取消除重复）
+// 调用前：已通过宏开启目标 MOS 管
+// 调用后：自动关闭所有管
+// 返回 0=正常, 1=超限（超限时写入 *p_error_id = mos_id）
+static uint8_t MOS_TestOneTube(uint8_t mos_id,
+                                uint16_t threshold,
+                                uint8_t *p_error_id)
+{
+    uint16_t peak_adc = 0;
+    uint16_t sample   = 0;
+    for (uint8_t i = 0; i < ESHL_MOS_Current_Test_num; i++) {
+        if (ADC_SampleOnce(&sample, NULL) == 0 && sample > peak_adc)
+            peak_adc = sample;
+    }
+    MOS_CloseAll();
+    if (peak_adc > threshold) {
+        *p_error_id = mos_id;
+        printf("MOS Self-Test: #%d fault, ADC peak: %d\r\n", mos_id, peak_adc);
+        return 1;
+    }
+    return 0;
+}
+```
+
+---
+
+### 2.9 完整替换 MOS_SelfTest() 函数
+
+**将原函数整体替换为：**
+
+```c
+uint8_t MOS_SelfTest(void)
+{
+    uint8_t  error_mos_id = 0;
+    uint16_t peak_adc     = 0;
+    uint16_t sample       = 0;
+
+    HAL_COMP_Stop_IT(&ESHL_COMP);
+    MOS_CloseAll();
+    ADC_SwitchToSingleMode();  // ★ 暂停 DMA 循环和 AWD
+
+    /* --- Step 0: 测总漏电流（所有管关闭时的底噪基准）--- */
+    for (uint8_t i = 0; i < ESHL_MOS_Current_Test_num; i++) {
+        if (ADC_SampleOnce(&sample, NULL) == 0 && sample > peak_adc)
+            peak_adc = sample;
+    }
+    ESHL_LeakageCurrent_ADC_Value = peak_adc;
+    if (peak_adc >= 15) {
+        error_mos_id = 12;
+        printf("MOS Self-Test: Leakage current fault, ADC: %d\r\n", peak_adc);
+        goto selftest_done;  // 漏电流大可能有管子损坏，继续测试有短路风险
+    }
+
+    /* --- Step 1~6: 逐管测试，发现故障立即退出 --- */
+    ESHL_AD_ENABLE();                 // 开 A相下管
+    if (MOS_TestOneTube(1, ESHL_MOS_Current_ADC_MAX, &error_mos_id)) goto selftest_done;
+
+    ESHL_AU_ENABLE(ESHL_MOS_TestPWM); // 开 A相上管
+    if (MOS_TestOneTube(2, ESHL_MOS_Current_ADC_MAX, &error_mos_id)) goto selftest_done;
+
+    ESHL_BD_ENABLE();                 // 开 B相下管
+    if (MOS_TestOneTube(3, ESHL_MOS_Current_ADC_MAX, &error_mos_id)) goto selftest_done;
+
+    ESHL_BU_ENABLE(ESHL_MOS_TestPWM); // 开 B相上管
+    if (MOS_TestOneTube(4, ESHL_MOS_Current_ADC_MAX, &error_mos_id)) goto selftest_done;
+
+    ESHL_CD_ENABLE();                 // 开 C相下管
+    if (MOS_TestOneTube(5, ESHL_MOS_Current_ADC_MAX, &error_mos_id)) goto selftest_done;
+
+    ESHL_CU_ENABLE(ESHL_MOS_TestPWM); // 开 C相上管
+    if (MOS_TestOneTube(6, ESHL_MOS_Current_ADC_MAX, &error_mos_id)) goto selftest_done;
+
+    printf("MOS Self-Test: All passed.\r\n");
+
+selftest_done:
+    MOS_CloseAll();
+    ADC_RestoreContinuousMode();  // ★ 无论成功失败，必须恢复 DMA 循环和 AWD
+    return error_mos_id;
+}
+```
+
+---
+
+### 2.10 在文件末尾新增三个 API 实现函数
+
+```c
+uint32_t ESHL_GetSpeedRPM(void)          { return ESHL_Diag.rpm; }
+uint32_t ESHL_GetCommutationPeriod(void) { return ESHL_Diag.commutation_period_us; }
+void     ESHL_ResetDiag(void)
+{
+    ESHL_Diag.last_zc_tick            = 0;
+    ESHL_Diag.commutation_period_us   = 0;
+    ESHL_Diag.rpm                     = 0;
+    ESHL_Diag.debounce_overrun_cnt    = 0;
+    ESHL_Diag.max_debounce_loops      = 0;
+    ESHL_Diag.isr_call_count          = 0;
+    ESHL_Diag.overcurrent_cnt         = 0;
+    ESHL_Diag.last_overcurrent_adc    = 0;
+    ESHL_Diag.last_lowvbat_adc        = 0;
+    ESHL_Diag.current_avg_adc         = 0;
+}
+```
+
+---
+
+### 2.11 在文件末尾（ESHL_ResetDiag 之后）新增两个 ADC 回调函数
+
+```c
+/* ================================================================
+ * HAL_ADC_LevelOutOfWindowCallback
+ * ADC 模拟看门狗回调（硬件过流保护）
+ *
+ * 触发条件：PA0(IN0) 采样值超过 CubeMX 配置的 AWD High Threshold
+ * 响应时间：< 5µs（远快于原 30ms 软件轮询）
+ * ================================================================ */
+void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc != &ESHL_Current_ADC) return;
+
+    // 只在电机运行时保护，初始化和自检阶段忽略
+    if ((ESHL_state != ESHL_STATE_RUN_CLOCKWISE) &&
+        (ESHL_state != ESHL_STATE_RUN_COUNTER_CLOCKWISE)) return;
+
+    HAL_COMP_Stop_IT(&ESHL_COMP);
+    MOS_CloseAll();
+    ESHL_run_pwm = 0;
+    ESHL_state = ESHL_STATE_CURRENT_ERROR;
+
+    // 诊断记录
+    ESHL_Diag.last_overcurrent_adc = adc_dma_buf[0];
+    ESHL_Diag.overcurrent_cnt++;
+}
+
+/* ================================================================
+ * HAL_ADC_ConvCpltCallback
+ * ADC DMA 每轮转换完成回调（维护电流滑动均值）
+ *
+ * 每当 DMA 搬完一轮（IN0+IN1 各一次）后触发
+ * 用环形缓冲维护 CURRENT_FILTER_SIZE 点滑动均值
+ * ================================================================ */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc != &ESHL_Current_ADC) return;
+
+    uint16_t new_val = adc_dma_buf[0];
+    current_filter_sum -= current_filter_buf[current_filter_idx];
+    current_filter_buf[current_filter_idx] = new_val;
+    current_filter_sum += new_val;
+    current_filter_idx = (current_filter_idx + 1) % CURRENT_FILTER_SIZE;
+    current_avg = (uint16_t)(current_filter_sum >> 3);  // /8 = >>3
+}
+```
+
+---
+
+### 2.12 修改 ESHL_CloseMOSComp() 和 ESHL_Break() 函数（追加清零逻辑）
+
+**在 ESHL_CloseMOSComp() 函数末尾追加：**
+```c
+    // 关机时清零转速，防止下次启动读到陈旧数据
+    ESHL_Diag.rpm = 0;
+    ESHL_Diag.commutation_period_us = 0;
+```
+
+**在 ESHL_Break() 函数内，`ESHL_state = ESHL_STATE_BRAKE_OK;` 之后追加：**
+```c
+    ESHL_Diag.rpm = 0;
+    ESHL_Diag.commutation_period_us = 0;
+```
+
+---
+
+## 三、CubeMX 必须同步修改（不在代码里，需手动配置）
+
+```
+ADC Configuration:
+  ✅ Scan Conversion Mode: Enabled
+  ✅ Continuous Conversion Mode: Enabled
+  ✅ DMA Continuous Requests: Enabled
+  ✅ End Of Conversion Selection: EOC flag at end of single channel conversion
+      （重要：自检的 ADC_SampleOnce 依赖此配置）
+
+ADC DMA Settings:
+  ✅ 添加 DMA Request: ADC
+  ✅ Mode: Circular
+  ✅ Data Width: Half Word → Half Word（16bit，对应 uint16_t）
+
+ADC Analog Watchdog:
+  ✅ Watchdog Mode: Single regular channel
+  ✅ Watchdog Channel: Channel 0 (PA0)
+  ✅ High Threshold: 1158（对应 ESHL_RUN_Current_Limit_ADC_DEFALT，可按实际调整）
+  ✅ Low Threshold: 0
+  ✅ Enable Analog Watchdog Interrupt: 勾选
+```
+
+---
+
+## 四、修改后的外部调用顺序（主函数）
+
+```c
+// 正确的初始化和调用顺序
+ESHL_ESC_Init();      // 内部已启动 DMA 循环和 AWD
+MOS_SelfTest();       // 自检（内部自动切换/恢复 ADC 模式）
+ESHL_Beep(...);       // 鸣叫提示
+ESHL_Start(...);      // 启动电机
+
+// 主循环里
+while(1) {
+    ESHL_RuningChack();              // 检测电机是否停转（保持不变）
+    ESHL_RuningCurrentVBATChack();  // 只检电压，电流已由 AWD 硬件处理
+    // 调试时可读取转速
+    // printf("RPM: %lu\r\n", ESHL_GetSpeedRPM());
+}
+```
+
+---
+
+## 五、注意事项（Claude Code 修改时须遵守）
+
+1. **保留** `uint32_t adc_val_buff[5]` 全局变量，MOS 自检辅助函数不再使用它，但其他可能依赖它的地方（如 ESHL_Break 的短路刹车过流检测）仍在用。
+
+2. **保留** 原有的 `step_num[12]` 数组和 `close_num`、`comp_num` 的 extern 声明，新的 ISR 仍会使用。
+
+3. **保留** `ESHL_U_D_Ctrl()` 函数内部逻辑完全不变，12 个 case 保持原样，查找表只替换了通道切换部分。
+
+4. **不修改** `ESHL_Beep()`、`ESHL_SET_PWM()`、`ESHL_SetAddr()`、`ESHL_SetDirection()` 等其他函数，它们与本次优化无关。
+
+5. `goto selftest_done` 是嵌入式标准的单出口清理模式，不要改成多个 return。
+
+6. 两个 HAL 回调（`HAL_ADC_LevelOutOfWindowCallback` 和 `HAL_ADC_ConvCpltCallback`）是 HAL 库固定名称，不得改名，且如果项目其他文件已定义了这两个函数，需要合并而不是重复定义。
+```
+
+
+---
+
+## 六、ADC 中断干扰问题修正（重要，覆盖第二章部分内容）
+
+### 问题说明
+
+STM32F051 上 ADC1、COMP1、COMP2 共用同一个中断向量 `ADC1_COMP_IRQn`。
+之前方案中的 `HAL_ADC_ConvCpltCallback` 会以约 27700 次/秒的频率触发 DMA 中断，
+严重干扰 COMP2 的六步换相中断响应时间。需要删除该回调，改为主循环直接读 DMA 缓冲。
+
+### 修改一：删除 2.1 节新增的滑动均值相关变量
+
+**删除以下四行变量定义（不要添加到代码里）：**
+```c
+// 以下四行全部删除，不需要
+#define CURRENT_FILTER_SIZE  8
+static volatile uint16_t current_filter_buf[CURRENT_FILTER_SIZE] = {0};
+static volatile uint8_t  current_filter_idx = 0;
+static volatile uint32_t current_filter_sum = 0;
+static volatile uint16_t current_avg = 0;
+```
+
+**`volatile uint16_t adc_dma_buf[2]` 和 `ESHL_DIAG_T ESHL_Diag` 保留，不受影响。**
+
+### 修改二：删除 2.11 节的 HAL_ADC_ConvCpltCallback 函数
+
+**整个函数不要添加，直接跳过：**
+```c
+// 整个函数删除，不要添加到代码里
+// void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) { ... }
+```
+
+**`HAL_ADC_LevelOutOfWindowCallback` 保留，不受影响。**
+
+### 修改三：修改 2.7 节的 ESHL_RuningCurrentVBATChack 函数
+
+**将函数中以下这一行：**
+```c
+ESHL_Diag.current_avg_adc = current_avg;
+```
+
+**替换为：**
+```c
+// 直接读 DMA 缓冲最新值，无需 DMA 中断维护均值
+ESHL_Diag.current_avg_adc = adc_dma_buf[0];
+```
+
+### 修改四：CubeMX 中关闭 DMA 中断
+
+在 CubeMX → DMA Settings → ADC 通道 → 取消勾选 DMA 传输完成中断：
+```
+DMA1 Channel 1 → 不勾选 "Use Memory To Periph" interrupt
+即：不在 NVIC 里使能 DMA1_Channel1_IRQn
+```
+
+只保留 ADC NVIC 里的 `ADC and COMP interrupts`（供 AWD 使用），DMA 中断不开。
+
+我不想修改cubemx你直接修改我的cubemx创建的工程源码吧

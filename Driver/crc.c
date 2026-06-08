@@ -38,12 +38,6 @@ uint8_t verify_checksum(uint8_t *pchMessage, uint16_t dwLength)
 {
     if ((pchMessage == NULL) || (dwLength <= 1)) return 0;
     uint8_t expected = get_checksum(pchMessage, dwLength);
-    for (size_t i = 0; i < dwLength+1; i++)
-    {
-        printf("%02X ", pchMessage[i]);
-    }
-    printf("\r\n");
-    printf("Expected checksum: 0x%02X, Received checksum: 0x%02X\r\n", expected, pchMessage[dwLength]);
     return (expected == pchMessage[dwLength]);
 }
 

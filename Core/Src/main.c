@@ -74,6 +74,8 @@ extern ESHL_PROTOCOL_PACK_ANALYSIS_T recv_str;
 extern uint16_t step_num[12];
 uint8_t test_rx_buffer[100]; // 测试用的接收缓存
 
+
+
 /* USER CODE END 0 */
 
 /**
@@ -210,7 +212,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    //ESHL_RuningCurrentVBATChack();//电流和电池电压检测
+    ESHL_RuningCurrentVBATChack();//电流和电池电压检测
     ESHL_CommunicationDataProcessing();//通信数据处理
     switch (ESHL_GetState()) {
       case ESHL_STATE_OFF://电调关闭
@@ -259,6 +261,7 @@ int main(void)
         ESHL_RuningChack();       //堵转检测
         ESHL_SET_PWM(ESHL_RunPWMBuff);//更新运行PWM值
         WS2812_SetAll(&ESHL_StateLed,0,15,0);//状态指示灯设为绿色
+        ESHL_PrintSpeedAndAdcReport();  //每秒打印一次转速和ADC值
         break;
 
        case ESHL_STATE_RUN_COUNTER_CLOCKWISE://逆时针方向运动中
@@ -266,6 +269,7 @@ int main(void)
         ESHL_RuningChack();       //堵转检测
         ESHL_SET_PWM(ESHL_RunPWMBuff);//更新运行PWM值
         WS2812_SetAll(&ESHL_StateLed,0,15,0);//状态指示灯设为绿色
+        ESHL_PrintSpeedAndAdcReport();  //每秒打印一次转速和ADC值
         break;
 
       case ESHL_STATE_MOTOR_RUNING_STOP://电机运行时停转

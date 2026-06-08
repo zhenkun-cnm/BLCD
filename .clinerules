@@ -1,0 +1,184 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 语言要求
+
+**所有回答、解释、注释、代码审查意见均使用中文。**
+
+## Project Overview
+
+ESHL (Electronic Speed Controller High-efficiency Library) — open-source sensorless BLDC (brushless DC) motor ESC firmware for STM32F051K8Ux (Cortex-M0, 48MHz, 64KB Flash, 8KB RAM). Implements 6-step commutation with back-EMF zero-crossing detection, a custom UART communication protocol, and various protection features.
+
+## Build & Debug
+
+> **IMPORTANT:** The project path contains Chinese characters (`无刷`) which MSYS `make` cannot handle — it garbles multi-byte characters during path conversion. A Windows directory junction `D:\eshl_build` → project root provides a pure ASCII path that avoids this issue.
+
+```bash
+# Prerequisites: ensure junction exists (one-time setup)
+# cmd /c "mklink /J D:\eshl_build D:\desktop\无刷\ESHL"
+
+# Add toolchains to PATH
+export PATH="/c/Program Files/CMake/bin:$PATH"
+export PATH="/c/Program Files (x86)/GNU Arm Embedded Toolchain/10 2021.10/bin:$PATH"
+export PATH="/c/Users/Lenovo/.eide/bin/builder/msys/bin:$PATH"
+
+# Prevent MSYS from mangling non-ASCII paths
+export MSYS_NO_PATHCONV=1
+
+# Configure (use Windows-style paths to prevent CMake from resolving the junction)
+cmake -S "D:/eshl_build" -B "D:/eshl_build/build" -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug
+
+# Build
+cmake --build "D:/eshl_build/build"
+
+# Generated outputs: build/ESHL.elf, ESHL.hex, ESHL.bin
+```
+
+**Prerequisites:** `arm-none-eabi-gcc` toolchain (GNU Arm Embedded Toolchain 10.3), CMake ≥3.28, OpenOCD.
+- ARM GCC: `C:\Program Files (x86)\GNU Arm Embedded Toolchain\10 2021.10\bin`
+- MSYS make: `C:\Users\Lenovo\.eide\bin\builder\msys\bin`
+
+**Debug** uses OpenOCD with CMSIS-DAP/DAP-Link adapter (see [daplink.cfg](daplink.cfg)). VS Code launch config uses `cortex-debug` extension with `armToolchainPath` and `openocdPath` set in [.vscode/settings.json](.vscode/settings.json).
+
+**CubeMX:** The project is generated from [ESHL.ioc](ESHL.ioc) — regenerate peripheral code from this file. User code is placed between `/* USER CODE BEGIN */` / `/* USER CODE END */` markers which CubeMX preserves.
+
+**Build flags** (from [CMakeLists.txt](CMakeLists.txt)): `-mcpu=cortex-m0 -mthumb`, Debug: `-Og -g`, Release: `-Ofast`. Defines: `DEBUG`, `USE_HAL_DRIVER`, `STM32F051x8`.
+
+## Project Structure
+
+```
+ESHL/
+├── Core/                          # STM32CubeMX-generated HAL code
+│   ├── Inc/                       #  Peripheral headers (adc, comp, dma, gpio, rtc, tim, usart, main)
+│   ├── Src/                       #  Peripheral implementations + main.c
+│   └── Startup/                   #  startup_stm32f051k8ux.s
+├── Driver/                        # Custom ESC application layer
+│   ├── ESHL_driver.c/h            #  Core ESC logic (6-step commutation, BEMF sensing, startup, brake, monitoring)
+│   ├── ESHL_protocol.c/h          #  Custom UART protocol with CRC16, addressing, command set
+│   ├── communication_management.c/h  #  UART/DMA half-duplex, command dispatch
+│   ├── Internal_Flash.c/h         #  STM32 internal Flash R/W (ESC address, current limit)
+│   ├── crc.c/h                    #  CRC8/CRC16 checksums (RoboFuture RM Team)
+│   └── ws2812b.c/h                #  WS2812B RGB LED via PWM+DMA bit-banging
+├── Drivers/                       # Vendor HAL + CMSIS (read-only)
+├── CMakeLists.txt                 # Auto-generated build config (from template)
+├── ESHL.ioc                       # STM32CubeMX project file
+├── STM32F051K8UX_FLASH.ld         # Linker script (64K Flash, 8K RAM, heap=0x200, stack=0x400)
+└── daplink.cfg                    # OpenOCD adapter config (CMSIS-DAP, SWD, 10MHz)
+```
+
+## Architecture — Core Concepts
+
+### Peripheral Assignments
+
+| Peripheral | Function | Pins / Details |
+|---|---|---|
+| TIM2 CH1 | Phase C upper MOSFET PWM | PA0 |
+| TIM2 CH2 | Phase B upper MOSFET PWM | PA1 |
+| TIM3 CH1 | Phase A upper MOSFET PWM | PA6 |
+| GPIOB PB7 | Phase A lower MOSFET (on/off) | AD |
+| GPIOB PB6 | Phase B lower MOSFET (on/off) | BD |
+| GPIOB PB5 | Phase C lower MOSFET (on/off) | CD |
+| TIM6 | µs delay timer (1MHz base) | — |
+| TIM16 CH1 | WS2812B LED PWM+DMA | PA7 |
+| COMP2 | BEMF zero-crossing detector | Inputs: PA2, PA4, PA5 (mux-switched per step) |
+| ADC | Current sense (IN1) + VBAT (IN2/VREFINT) | 12-bit, 3.3V ref |
+| USART1 | Half-duplex UART (DMA + idle-line) | PA9(TX)/PA10(RX) |
+
+**Upper MOSFETs** use PWM via TIM channels; **lower MOSFETs** are simple GPIO on/off (no PWM). This means the ESC uses high-side PWM switching.
+
+### Sensorless 6-Step Commutation ([ESHL_driver.c](Driver/ESHL_driver.c))
+
+The main control loop runs in `main()` as a state machine (`ESHL_STATE_ENUM_T`). Key states:
+
+| State | Meaning |
+|---|---|
+| OFFSET / READY | Idle, awaiting host command |
+| START → OPEN_LOOP_START | Open-loop startup (forced commutation, no BEMF) |
+| RUN_CLOCKWISE / RUN_COUNTER_CLOCKWISE | Closed-loop sensorless run with BEMF zero-crossing |
+| BRAKE | Coast or 3-phase short brake |
+| MOS_ERROR / CURRENT_ERROR / BATTERY_VOLTAGE_ERROR | Protection fault states |
+| SET_ADDR / SET_ADDR_OK | Address assignment mode |
+
+**Commutation step table** — steps 0–5 clockwise, 6–11 counter-clockwise:
+
+| Step | Energized Pair | Upper ON | Lower ON | Floating Phase |
+|---|---|---|---|---|
+| 0 / 6 | B→C | B (TIM2 CH2) | C (PB5) | A |
+| 1 / 10 | B→A | B (TIM2 CH2) | A (PB7) | C |
+| 2 / 9 | C→A | C (TIM2 CH1) | A (PB7) | B |
+| 3 / 8 | C→B | C (TIM2 CH1) | B (PB6) | A |
+| 4 / 7 | A→B | A (TIM3 CH1) | B (PB6) | C |
+| 5 / 11 | A→C | A (TIM3 CH1) | C (PB5) | B |
+
+**BEMF detection:** Comparator `COMP2` triggers `HAL_COMP_TriggerCallback()` on zero-crossing. The ISR reads `COMP2->CSR` bit 14 to get the output state (`SENSE_L` / `SENSE_H` macros). The comparator input mux (PA2/PA4/PA5) is switched each step to sample the floating (unenergized) phase — this is where BEMF voltage crosses zero relative to the virtual neutral point.
+
+**MOS self-test** (`MOS_SelfTest()`) runs at boot — opens each phase pair sequentially at `ESHL_MOS_TestPWM` (20) and measures current via ADC. Leakage > ~200mA or short-circuit current flags the fault with a blink-code on the status LED.
+
+### Communication Protocol ([ESHL_protocol.c](Driver/ESHL_protocol.c), [communication_management.c](Driver/communication_management.c))
+
+Custom half-duplex UART protocol over USART1 with DMA + idle-line detection:
+
+**Packet format** (max 11 bytes):
+
+| Field | Size | Details |
+|---|---|---|
+| Frame header | 1 byte | `0xEC` (host→ESC), `0xCE` (ESC→host) |
+| Address | 2 bytes | Default `0xEC00`, broadcast `0xAAAA` |
+| Length | 1 byte | Total packet length |
+| Command | 1 byte | See command table below |
+| Payload | varies | Throttle (float, 4 bytes), direction (uint8), current limit (uint16), addr (uint16), error code (uint8) |
+| CRC16 | 2 bytes | Checksum over entire packet |
+
+**Commands:**
+
+| Cmd | Name | Host→ESC | ESC→Host |
+|---|---|---|---|
+| `0xC1` | Throttle | float throttle (0.0–1.0) | — |
+| `0xC2` | Off | uint8=0 | uint8=`0xD0` (ack) |
+| `0xC3` | Start | uint8=`0xA1` (CW) / `0xA2` (CCW) | — |
+| `0xC4` | Brake | uint8=0 | uint8=`0xA3` (done) |
+| `0xC5` | Current limit | uint16 ADC threshold | uint8=`0xAA` (ack) |
+| `0xC6` | Error report | — | uint8 error code |
+| `0xC7` | Change address | broadcast, uint8=0 | broadcast new addr |
+
+**Error codes:** `0xE0` MOS fault, `0xE1` current fault, `0xE2` startup fail (max retries), `0xE3` unexpected stop during run, `0xE4` battery voltage fault.
+
+**Half-duplex send flow:** `ESHL_CommunicationStop()` → `HAL_HalfDuplex_EnableTransmitter()` → `HAL_UART_Transmit_DMA()` → wait for TC (transmit complete) flag → `HAL_HalfDuplex_EnableReceiver()` → `ESHL_CommunicationStart()`. Always stop reception before transmitting, and wait for the shift register to drain (`USART1->ISR & USART_ISR_TC`) before switching back to receive.
+
+**Receive path:** `HAL_UARTEx_ReceiveToIdle_DMA()` with DMA half-transfer interrupt disabled (`__HAL_DMA_DISABLE_IT(..., DMA_IT_HT)`). The idle callback (`HAL_UARTEx_RxEventCallback`) copies `rx_buff` → `ESHL_RXPack`, then re-arms reception. `ESHL_CommunicationDataProcessing()` scans the buffer for valid packets, matching address or broadcast, then dispatches via `ESHL_CMDProcessing()`.
+
+**Address assignment:** Rotating a connected motor generates BEMF pulses; the ESC counts these and auto-assigns sequential addresses (`0xEC00`, `0xEC01`, …). Address + current limit are persisted as two `uint16_t` values at Flash address `0x0800F800` (last page of 64KB Flash).
+
+### Status LED ([ws2812b.c](Driver/ws2812b.c))
+
+WS2812B RGB LED via TIM16 CH1 PWM+DMA bit-banging at 800kHz. A single LED is used as status indicator (instantiated in `main()` as `ESHL_StateLed`). PWM compare values: `WS_H=41` (logical 1), `WS_L=19` (logical 0). Color code:
+
+| Color | Meaning |
+|---|---|
+| Green solid | Ready / running |
+| Yellow solid | Initializing |
+| Red blink | MOS error (blink count = error code) |
+| Orange blink | Current error |
+| White blink | Open-loop startup failed (max retries) |
+| Purple solid | Address setting mode |
+| Purple blink | Address set OK (blink count = address LSB) |
+| Cyan blink | Battery voltage error |
+| Green+Blue alternating | Received packet for different address |
+
+### Voltage & Current Monitoring
+
+- **Battery:** Auto-detects 3S–6S LiPo on boot by averaging 10 ADC samples. Voltage range windows: 3S=11.1–12.6V, 4S=14.8–16.8V, 5S=18.5–21.0V, 6S=22.2–25.2V. Runtime under-voltage check if `ESHL_VBAT_CHACK_EN=1` (threshold `ESHL_VBAT_LIMIT=0.1V` below nominal).
+- **Current:** ADC reading across a 0.5mΩ shunt × 50× amplifier. ADC value formula: `ADC = I(A) × 0.0005Ω × 50 × 4096 / 3.3V ≈ I(A) × 31.03`. Configurable current limit stored in Flash alongside address. Various fault thresholds: MOS test=15, rotor lock=45, open-loop transition=140, run default=1158, design max=2191.
+- Sampling interval: every 30ms during run (`ESHL_RUNING_CURRENT_VBAT_CHACK_TIMOUT`).
+
+### Open-Loop Startup Sequence ([ESHL_driver.c:249](Driver/ESHL_driver.c#L249))
+
+1. Rotor alignment: energize first step at PWM=19 for ~200ms, monitoring current (< `ESHL_RotoCurrent_ADC_MAX`)
+2. Forced commutation: step through phases with linearly decreasing step time (from 100 → 20 timer ticks), monitoring current at each step (< `ESHL_OPEN_LOOP_Transition_Period_ADC_MAX`)
+3. Count BEMF zero-crossing events; if 18–35 events detected before step time hits minimum → success, switch to closed-loop
+4. Otherwise → `OPEN_LOOP_START_FAIL`, retry up to `ESHL_OPEN_LOOP_RESTART_MAX_NUM` (5) times
+
+### Brake Modes ([ESHL_driver.h:58](Driver/ESHL_driver.h#L58))
+
+Controlled by `ESHL_BREAK_MOD`: `0` = coast (all MOSFETs off), `1` = 3-phase short brake (all lower MOSFETs on at `ESHL_BREAK_PWM`). Brake completion detected when BEMF zero-crossings stop (same event count ≥ `ESHL_BREAK_OK_SAME_BMEF_NUM`=500).
