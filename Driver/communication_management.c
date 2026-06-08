@@ -209,20 +209,20 @@ static void ESHL_CMDProcessing(ESHL_PROTOCOL_PACK_ANALYSIS_T *pkt)
             }
             break;
 
-        case ESHL_PROTOCOL_CMD_HELP: // 0xC8 — 帮助 (printf 输出)
-            printf("\r\n=== ESHL CMD ===\r\n");
-            printf("C1 thr(float)\r\n");
-            printf("C2 off\r\n");
-            printf("C3 on A1=CW A2=CCW\r\n");
-            printf("C4 brake\r\n");
-            printf("C5 curlim(u16)\r\n");
-            printf("C6 err\r\n");
-            printf("C7 setaddr(bcast)\r\n");
-            printf("C8 help\r\n");
-            printf("C9 chksum(raw)\r\n");
+        case ESHL_PROTOCOL_CMD_HELP: // 0xC8 — 帮助 (ESHL_PRINTF 输出)
+            ESHL_PRINTF("\r\n=== ESHL CMD ===\r\n");
+            ESHL_PRINTF("C1 thr(float)\r\n");
+            ESHL_PRINTF("C2 off\r\n");
+            ESHL_PRINTF("C3 on A1=CW A2=CCW\r\n");
+            ESHL_PRINTF("C4 brake\r\n");
+            ESHL_PRINTF("C5 curlim(u16)\r\n");
+            ESHL_PRINTF("C6 err\r\n");
+            ESHL_PRINTF("C7 setaddr(bcast)\r\n");
+            ESHL_PRINTF("C8 help\r\n");
+            ESHL_PRINTF("C9 chksum(raw)\r\n");
             break;
 
-        case ESHL_PROTOCOL_CMD_CHECKSUM: // 0xC9 — 算合校验 (printf 返回)
+        case ESHL_PROTOCOL_CMD_CHECKSUM: // 0xC9 — 算合校验 (ESHL_PRINTF 返回)
             {
                 if (recv_raw_pkt != NULL && pkt->len >= 6)
                 {
@@ -230,12 +230,12 @@ static void ESHL_CMDProcessing(ESHL_PROTOCOL_PACK_ANALYSIS_T *pkt)
                     if (payload_len >= 1)
                     {
                         uint8_t sum = get_checksum(&recv_raw_pkt[5], payload_len);
-                        printf("checksum: [");
+                        ESHL_PRINTF("checksum: [");
                         for (uint8_t i = 0; i < payload_len; i++)
                         {
-                            printf("%02X ", recv_raw_pkt[5 + i]);
+                            ESHL_PRINTF("%02X ", recv_raw_pkt[5 + i]);
                         }
-                        printf("] = 0x%02X\r\n", sum);
+                        ESHL_PRINTF("] = 0x%02X\r\n", sum);
                     }
                 }
             }
@@ -259,13 +259,13 @@ void ESHL_CommunicationDataProcessing()
     }
     uart_updated_flag = 0; // 消费标志
     
-    // 【修改】：注释掉了这部分 printf，防止破坏二进制通信总线导致乱码
+    // 【修改】：注释掉了这部分 ESHL_PRINTF，防止破坏二进制通信总线导致乱码
     /*
-    printf("Received data: ");
+    ESHL_PRINTF("Received data: ");
     for (int i = 0; i < ESHL_RX_PACK_LEN; i++) {
-        printf("%02X ", buf[i]);
+        ESHL_PRINTF("%02X ", buf[i]);
     }
-    printf("\r\n");
+    ESHL_PRINTF("\r\n");
     */
 
     uint16_t pos = 0;

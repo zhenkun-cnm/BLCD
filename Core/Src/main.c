@@ -205,7 +205,7 @@ int main(void)
     ESHL_SetState(EShl_STATE_READY);//将电调状态设置为准备就绪
   }
 
-  printf("ESHL ESC initialized successfully, waiting for host commands...\r\n");
+  ESHL_PRINTF("ESHL ESC initialized successfully, waiting for host commands...\r\n");
   
   /* USER CODE END 2 */
 
@@ -276,7 +276,7 @@ int main(void)
       case ESHL_STATE_MOTOR_RUNING_STOP://电机运行时停转
         ESHL_CommunicationSendCode(ESHL_PROTOCOL_CMD_ERROR,0XE3);//发送电调错误码
         ESHL_CommunicationStart();//开启接收
-        printf("Motor stopped during running, possible cause: motor stall or sudden load increase\r\n");
+        ESHL_PRINTF("Motor stopped during running, possible cause: motor stall or sudden load increase\r\n");
         ESHL_CloseMOSComp();//关闭所有MOS管并且关闭比较器
         ESHL_Start(ESHL_GetDirection());//开环启动
         break;
@@ -439,7 +439,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: ESHL_PRINTF("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
