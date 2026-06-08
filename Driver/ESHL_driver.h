@@ -8,6 +8,29 @@
 
 #include "main.h"
 
+/* ====================================================================
+ * 模式选择宏（互斥，二选一）
+ *   DEBUG_MODE — 调试模式，允许 ESHL_PRINTF 输出
+ *   ESHL_MODE  — 电调模式（量产），屏蔽所有 ESHL_PRINTF 输出
+ *
+ * 使用方式：
+ *   ESHL_PRINTF("RPM: %lu\n", rpm);
+ *   调试模式下展开为 printf，电调模式下展开为空（零开销）
+ * ==================================================================== */
+//#define DEBUG_MODE
+#define ESHL_MODE
+
+#if defined(DEBUG_MODE) && defined(ESHL_MODE)
+    #error "ESHL_MODE 和 DEBUG_MODE 互斥，只能定义其中一个！"
+#endif
+
+#ifdef DEBUG_MODE
+    #define ESHL_PRINTF(fmt, ...)  printf(fmt, ##__VA_ARGS__)
+#else
+    #define ESHL_PRINTF(fmt, ...)
+#endif
+/* ==================================================================== */
+
 #define ESHL_COMP hcomp2			//电调使用的比较器
 
 #define ESHL_Current_ADC   hadc    //MOS电流计使用的ADC
