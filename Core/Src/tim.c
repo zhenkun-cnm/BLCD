@@ -28,7 +28,40 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim16;
+TIM_HandleTypeDef htim1;  // 在文件顶部和其他句柄一起添加
+
 DMA_HandleTypeDef hdma_tim16_ch1_up;
+
+
+void MX_TIM1_Init(void)
+{
+    TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+    htim1.Instance               = TIM1;
+    htim1.Init.Prescaler         = 47;        // 48MHz / 48 = 1MHz → 1us/tick
+    htim1.Init.CounterMode       = TIM_COUNTERMODE_UP;
+    htim1.Init.Period            = 0xFFFF;    // 初始值，运行时动态修改
+    htim1.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+    htim1.Init.RepetitionCounter = 0;
+    htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+    if (HAL_TIM_Base_Init(&htim1) != HAL_OK) Error_Handler();
+
+    sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+    sMasterConfig.MasterSlaveMode     = TIM_MASTERSLAVEMODE_DISABLE;
+    if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+        Error_Handler();
+
+    // 开启 TIM1 更新中断（溢出时触发换相）
+    __HAL_TIM_ENABLE_IT(&htim1, TIM_IT_UPDATE);
+}
+
+// MspInit 里添加（在 HAL_TIM_Base_MspInit 函数的 if-else 链里追加）
+// else if(tim_baseHandle->Instance==TIM1)
+// {
+//     __HAL_RCC_TIM1_CLK_ENABLE();
+//     HAL_NVIC_SetPriority(TIM1_BRK_UP_TRG_COM_IRQn, 0, 0);
+//     HAL_NVIC_EnableIRQ(TIM1_BRK_UP_TRG_COM_IRQn);
+// }
 
 /* TIM2 init function */
 void MX_TIM2_Init(void)
@@ -291,7 +324,6 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
     {
       Error_Handler();
     }
-
     /* Several peripheral DMA handle pointers point to the same DMA handle.
      Be aware that there is only one channel to perform all the requested DMAs. */
     __HAL_LINKDMA(tim_baseHandle,hdma[TIM_DMA_ID_CC1],hdma_tim16_ch1_up);
@@ -301,6 +333,13 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
 
   /* USER CODE END TIM16_MspInit 1 */
   }
+  else if(tim_baseHandle->Instance==TIM1)
+{
+    __HAL_RCC_TIM1_CLK_ENABLE();
+    /* ★ 必须加这两行，否则 TIM1 中断永远不触发 */
+    HAL_NVIC_SetPriority(TIM1_BRK_UP_TRG_COM_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(TIM1_BRK_UP_TRG_COM_IRQn);
+}
 }
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef* timHandle)
 {

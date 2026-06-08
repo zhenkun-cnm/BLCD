@@ -73,7 +73,7 @@
 #define ESHL_MOS_Current_ADC_MAX        			50       //MOS电流阈值,超过此值视为电流不正常
 #define ESHL_RotoCurrent_ADC_MAX    				50		//电调转子定位电流阈值，超过此值视为电流不正常
 #define ESHL_OPEN_LOOP_Transition_Period_ADC_MAX	140		//电调开环过渡期电流阈值，超过此值视为电流不正常
-#define ESHL_RUN_Current_Limit_ADC_DEFALT			1158	//电调运行电流限制ADC值,默认1158
+#define ESHL_RUN_Current_Limit_ADC_DEFALT			783	//电调运行电流限制ADC值,默认1158
 
 
 #define ESHL_MOTOR_TIMEOUT							250		//电机换向超时时间(ms),超过此值视为换向失败
@@ -81,6 +81,16 @@
 
 #define ESHL_OPEN_LOOP_RESTART_MAX_NUM				5		//电调开环启动最大重试次数,超过此值视为无法开环启动
 															//	↑↑↑(注:必须大于或等于2,乱填数据后果自负)↑↑↑
+
+/* --- 三阶段转子定位配置 ---
+ * 第一阶段: 强力预拉合,给转子一个初始力矩方向
+ * 第二阶段: 顺序慢扫一圈(step 1~5),将转子带到已知位置
+ * 第三阶段: 强力回到 step=0 吸合,确定加速起点 */
+#define ESHL_ALIGN_STRONG_PWM   70		//强力定位PWM(第一/三阶段)
+#define ESHL_ALIGN_SCAN_PWM     60		//扫描定位PWM(第二阶段)
+#define ESHL_ALIGN_PREHOLD_MS   300		//第一阶段预拉合持续时间(ms)
+#define ESHL_ALIGN_STEP_MS      80		//第二阶段每步保持时间(ms)
+#define ESHL_ALIGN_HOLD_MS      400		//第三阶段最终吸合持续时间(ms)
 
 /* ADC 模拟看门狗过流阈值，监控 PA0(IN0) 电流通道
  * 复用运行限流值 1158，对应约 37A */
@@ -102,7 +112,7 @@
  * 公式: 电气周期 T = 6 * 过零间隔
  *      转速 RPM = 60 * 10^6 / (T_us * 极对数) */
 #define ESHL_MOTOR_POLE_PAIRS		7		//电机极对数,需要根据实际电机修改(常见外转子无刷:7/12/14)
-#define ESHL_PLL_FILTER_ALPHA		3		//PLL 一阶低通滤波系数 (1~7,值越大滤波越强)
+#define ESHL_PLL_FILTER_ALPHA		4		//PLL 一阶低通滤波系数 (2~16,值越大滤波越强)
 											//  新周期 = (旧周期 * (ALPHA-1) + 实测周期) / ALPHA
 
 /* --- 相位超前补偿配置 ---
@@ -119,11 +129,12 @@
  *          100 = 立即换相 (相当于原代码行为) */
 #define ESHL_PHASE_ADV_ENABLE		0		//是否启用相位超前补偿 (0=关闭, 与原代码行为相同)
 											//建议: 先关闭,等PLL稳定运行后再开启调试
-#define ESHL_PHASE_ADV_LOW_RPM		3000	//低速阈值:此速度以下不补偿
-#define ESHL_PHASE_ADV_HIGH_RPM		15000	//高速阈值:此速度以上用最大补偿
-#define ESHL_PHASE_ADV_MAX_PCT		40		//最大超前百分比(0~99),数值越大超前越多
+#define ESHL_PHASE_ADV_LOW_RPM		3000   	//低速阈值:此速度以下不补偿
+#define ESHL_PHASE_ADV_HIGH_RPM		12000	//高速阈值:此速度以上用最大补偿
+#define ESHL_PHASE_ADV_MAX_PCT		25		//最大超前百分比(0~99),数值越大超前越多
 /* ============================================================================ */
 
+#define ESHL_ADVANCE_TIM    htim1   // 相位超前延迟定时器
 
 typedef enum ESHL_BAT_ENUM {
 	ESHL_BAT_3S,		//3S锂电池
@@ -131,9 +142,6 @@ typedef enum ESHL_BAT_ENUM {
 	ESHL_BAT_5S,		//5S锂电池
 	ESHL_BAT_6S,		//6S锂电池
 }ESHL_BAT_ENUM_T;//电调电池枚举
-
-
-
 
 
 typedef enum ESHL_BEEP_ENUM
@@ -198,7 +206,6 @@ typedef struct ESHL_DIAG_T {
 	volatile uint16_t current_avg_adc;		//当前电流最新值(供主循环读取)
 } ESHL_DIAG_T;
 /* ============================================================================ */
-
 
 
 extern float    ESHL_InitVbat;			//初始化时测得的电池电压(V)，用于调试输出

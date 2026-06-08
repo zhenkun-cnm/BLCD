@@ -365,18 +365,60 @@ void ESHL_Start(ESHL_DIRECTION_ENUM_T direction)
 	ESHL_state = ESHL_STATE_OPEN_LOOP_START;//电调状态更新为开环启动状态
 	ESHL_step = (ESHL_direction == ESHL_CLOCKWISE) ? 0 : 6;
 
-	ESHL_U_D_Ctrl(19);//转子定位
-    for (uint8_t i = 0; i < 200; i++){
-    	/* DMA 已持续运行，直接读最新电流值，不重启 DMA */
-    	if (adc_dma_buf[1] >= ESHL_RotoCurrent_ADC_MAX) {
-    		MOS_CloseAll();
-    		HAL_COMP_Stop(&ESHL_COMP);
-    		ESHL_run_pwm = 0;
-    		ESHL_state = ESHL_STATE_CURRENT_ERROR;//电调状态更新为电流异常
-    		return ;
-    	}
-    	HAL_Delay(1);
-    }
+	/* ===== 三阶段转子定位 ===== */
+
+	// /* 阶段一: 强力预拉合 — 给转子施加 step=0 方向的磁场,
+	//  * 让转子开始向该方向运动,消除完全随机初始位置带来的对立面死角 */
+	// ESHL_step = (ESHL_direction == ESHL_CLOCKWISE) ? 0 : 6;
+	// ESHL_U_D_Ctrl(ESHL_ALIGN_STRONG_PWM);
+	// for (uint16_t i = 0; i < ESHL_ALIGN_PREHOLD_MS; i++) {
+	// 	if (adc_dma_buf[1] >= ESHL_RotoCurrent_ADC_MAX) {
+	// 		MOS_CloseAll();
+	// 		HAL_COMP_Stop(&ESHL_COMP);
+	// 		ESHL_run_pwm = 0;
+	// 		ESHL_state = ESHL_STATE_CURRENT_ERROR;
+	// 		return;
+	// 	}
+	// 	HAL_Delay(1);
+	// }
+
+	// /* 阶段二: 顺序慢扫 — 依次切换 step 1~5(或 7~11),
+	//  * 无论转子初始在哪里,扫完后必然跟到末位步附近,消除位置不确定性 */
+	// uint8_t scan_start = (ESHL_direction == ESHL_CLOCKWISE) ? 1 : 7;
+	// uint8_t scan_end   = (ESHL_direction == ESHL_CLOCKWISE) ? 5 : 11;
+	// for (uint8_t s = scan_start; s <= scan_end; s++) {
+	// 	ESHL_step = s;
+	// 	ESHL_U_D_Ctrl(ESHL_ALIGN_SCAN_PWM);
+	// 	for (uint16_t i = 0; i < ESHL_ALIGN_STEP_MS; i++) {
+	// 		if (adc_dma_buf[1] >= ESHL_RotoCurrent_ADC_MAX) {
+	// 			MOS_CloseAll();
+	// 			HAL_COMP_Stop(&ESHL_COMP);
+	// 			ESHL_run_pwm = 0;
+	// 			ESHL_state = ESHL_STATE_CURRENT_ERROR;
+	// 			return;
+	// 		}
+	// 		HAL_Delay(1);
+	// 	}
+	// }
+
+	// /* 阶段三: 强力吸合回 step=0 — 转子此时在末位步附近(只差一步),
+	//  * 强力拉回 step=0 确保加速换相的起点完全对准 */
+	// ESHL_step = (ESHL_direction == ESHL_CLOCKWISE) ? 0 : 6;
+	// ESHL_U_D_Ctrl(ESHL_ALIGN_STRONG_PWM);
+	// for (uint16_t i = 0; i < ESHL_ALIGN_HOLD_MS; i++) {
+	// 	if (adc_dma_buf[1] >= ESHL_RotoCurrent_ADC_MAX) {
+	// 		MOS_CloseAll();
+	// 		HAL_COMP_Stop(&ESHL_COMP);
+	// 		ESHL_run_pwm = 0;
+	// 		ESHL_state = ESHL_STATE_CURRENT_ERROR;
+	// 		return;
+	// 	}
+	// 	HAL_Delay(1);
+	// }
+	MOS_CloseAll();
+	delay_us(&ESHL_US_TIM, 5000); // 等待转子完全静止
+	/* ===== 三阶段定位完成,转子已对准 step=0(或 step=6) ===== */
+
     while (1)
     {
         for (uint16_t i = 0; i < time; ++i) {
@@ -464,9 +506,7 @@ static inline uint32_t calc_us_diff(uint32_t now, uint32_t last)
 static inline void pll_update(uint32_t diff_us)
 {
     /* 异常过滤:过短(可能是抖动)或过长(可能是启动期/丢步)都不参与滤波 */
-    if (diff_us < 50U || diff_us > 50000U) {
-        return;
-    }
+   if (diff_us < 100U || diff_us > 750U) return;
 
     /* 一阶低通滤波: new = (old*(ALPHA-1) + raw) / ALPHA
      * ALPHA 越大,响应越慢,但滤波越平滑 */
@@ -509,31 +549,38 @@ static inline uint32_t calc_phase_advance_delay_us(void)
 {
 #if ESHL_PHASE_ADV_ENABLE
     uint32_t period = ESHL_Diag.commutation_period_us;
-    if (period == 0) return 0;   //PLL 未稳定,不延迟
+    if (period == 0) return 0;
 
-    /* 30°基础延迟 = 换相周期的一半 */
-    uint32_t base_delay = period >> 1;
-
-    /* 根据 RPM 线性插值出超前百分比 */
     uint32_t rpm = ESHL_Diag.rpm;
+    if (rpm < ESHL_PHASE_ADV_LOW_RPM) return 0;
+
     uint32_t pct;
-    if (rpm <= ESHL_PHASE_ADV_LOW_RPM) {
-        pct = 0;
-    } else if (rpm >= ESHL_PHASE_ADV_HIGH_RPM) {
+    if (rpm >= ESHL_PHASE_ADV_HIGH_RPM) {
         pct = ESHL_PHASE_ADV_MAX_PCT;
     } else {
-        /* 在低速和高速阈值之间线性插值 */
-        pct = (rpm - ESHL_PHASE_ADV_LOW_RPM) * ESHL_PHASE_ADV_MAX_PCT /
-              (ESHL_PHASE_ADV_HIGH_RPM - ESHL_PHASE_ADV_LOW_RPM);
+        pct = (rpm - ESHL_PHASE_ADV_LOW_RPM) * ESHL_PHASE_ADV_MAX_PCT
+            / (ESHL_PHASE_ADV_HIGH_RPM - ESHL_PHASE_ADV_LOW_RPM);
     }
 
-    uint32_t advance = base_delay * pct / 100;
-    return (base_delay > advance) ? (base_delay - advance) : 0;
+    uint32_t delay = period * pct / 100;
+
+    /* 分段限制：
+     * 低速(<8000RPM)  最大 25us
+     * 高速(>=8000RPM) 最大 15us
+     * 防止高速过补偿 */
+    uint32_t max_delay;
+    if (rpm < 8000) {
+        max_delay = 25;
+    } else {
+        max_delay = 15;
+    }
+    if (delay > max_delay) delay = max_delay;
+
+    return delay;
 #else
-    return 0;	//相位补偿关闭,与原代码行为一致
+    return 0;
 #endif
 }
-
 
 /* ============================================================================
  * ★★★ 优化后的比较器中断回调 (核心 ISR) ★★★
@@ -1149,18 +1196,37 @@ void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef *hadc)
 {
     if (hadc->Instance != ADC1) return;
 
-    /* 只在电机运行时保护，自检和初始化阶段忽略 */
     if ((ESHL_state != ESHL_STATE_RUN_CLOCKWISE) &&
         (ESHL_state != ESHL_STATE_RUN_COUNTER_CLOCKWISE)) return;
 
-    HAL_COMP_Stop_IT(&ESHL_COMP);
-    MOS_CloseAll();
-    ESHL_run_pwm = 0;
-    ESHL_state = ESHL_STATE_CURRENT_ERROR;
+    static uint8_t  overcurrent_cnt   = 0;
+    static uint32_t last_trigger_tick = 0;
 
-	printf("Overcurrent detected! ADC value: %d\r\n", adc_dma_buf[1]);
-    ESHL_Diag.last_overcurrent_adc = adc_dma_buf[1];
-    ESHL_Diag.overcurrent_cnt++;
+    /* 直接读 ADC 数据寄存器，这是触发 AWD 时的原始值 */
+    uint16_t val = (uint16_t)(hadc->Instance->DR & 0xFFF);
+    uint32_t now = HAL_GetTick();
+
+    /* 两次触发间隔超过 1ms 视为非连续，重新计数 */
+    if (now - last_trigger_tick > 1) {
+        overcurrent_cnt = 0;
+    }
+    last_trigger_tick = now;
+
+    if (++overcurrent_cnt >= 3) {
+        overcurrent_cnt = 0;
+
+        HAL_COMP_Stop_IT(&ESHL_COMP);
+        MOS_CloseAll();
+        //HAL_ADC_Stop_DMA(&ESHL_Current_ADC);
+
+        ESHL_run_pwm = 0;
+        ESHL_state = ESHL_STATE_CURRENT_ERROR;
+
+        printf("Overcurrent! ADC: %d (%.1fA)\r\n",
+               val, (float)val / 31.3f);
+        ESHL_Diag.last_overcurrent_adc = val;
+        ESHL_Diag.overcurrent_cnt++;
+    }
 }
 
 
@@ -1170,7 +1236,7 @@ void ESHL_PrintSpeedAndAdcReport(void)
     static uint8_t print_state = 0; // 0: 打印转速, 1: 打印电气参数
 
     // 节流：每 1000ms 触发一次
-    if (HAL_GetTick() - last_tick < 1000) return;
+    if (HAL_GetTick() - last_tick < 100) return;
     last_tick = HAL_GetTick();
 
     if (print_state == 0) {
